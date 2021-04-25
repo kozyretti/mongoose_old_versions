@@ -33,6 +33,7 @@
 #include <limits.h>
 #include <stddef.h>
 #include <stdarg.h>
+#include <ctype.h>
 
 #include "mongoose.h"
 
@@ -191,7 +192,8 @@ static void process_command_line_arguments(char *argv[], char **options) {
       line_no++;
 
       // Ignore empty lines and comments
-      if (line[0] == '#' || line[0] == '\n')
+	  for (i = 0; isspace(* (unsigned char *) &line[i]); ) i++;
+      if (line[i] == '#' || line[i] == '\0')
         continue;
 
       if (sscanf(line, "%s %[^\r\n#]", opt, val) != 2) {
@@ -203,7 +205,7 @@ static void process_command_line_arguments(char *argv[], char **options) {
     (void) fclose(fp);
   }
 
-  // Now handle command line flags. They override config file settings.
+  // Handle command line flags. They override config file and default settings.
   for (i = cmd_line_opts_start; argv[i] != NULL; i += 2) {
     if (argv[i][0] != '-' || argv[i + 1] == NULL) {
       show_usage_and_exit();
@@ -219,9 +221,11 @@ static void init_server_name(void) {
 
 static void *mongoose_callback(enum mg_event ev, struct mg_connection *conn) {
   if (ev == MG_EVENT_LOG) {
-    printf("%s\n", mg_get_request_info(conn)->log_message);
+    printf("%s\n", mg_get_log_message(conn));
   }
 
+  // Returning NULL marks request as not handled, signalling mongoose to
+  // proceed with handling it.
   return NULL;
 }
 
@@ -483,6 +487,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdline, int show) {
     DispatchMessage(&msg);
   }
 
+  // Return the WM_QUIT value.
   return msg.wParam;
 }
 #else

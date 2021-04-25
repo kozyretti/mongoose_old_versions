@@ -1,3 +1,4 @@
+#define USE_WEBSOCKET
 #include "mongoose.c"
 
 #define FATAL(str, line) do {                     \
@@ -64,10 +65,10 @@ static void test_should_keep_alive(void) {
   parse_http_request(req4, sizeof(req4), &conn.request_info);
   ASSERT(should_keep_alive(&conn) == 1);
 
-  conn.request_info.status_code = 401;
+  conn.status_code = 401;
   ASSERT(should_keep_alive(&conn) == 0);
 
-  conn.request_info.status_code = 200;
+  conn.status_code = 200;
   conn.must_close = 1;
   ASSERT(should_keep_alive(&conn) == 0);
 }
@@ -111,17 +112,14 @@ static void test_remove_double_dots() {
     {"/...///", "/./"},
     {"/a...///", "/a.../"},
     {"/.x", "/.x"},
-#if defined(_WIN32)
     {"/\\", "/"},
-#else
-    {"/\\", "/\\"},
-#endif
     {"/a\\", "/a\\"},
+    {"/a\\\\...", "/a\\."},
   };
   size_t i;
 
   for (i = 0; i < ARRAY_SIZE(data); i++) {
-    //printf("[%s] -> [%s]\n", data[i].before, data[i].after);
+    printf("[%s] -> [%s]\n", data[i].before, data[i].after);
     remove_double_dots_and_double_slashes(data[i].before);
     ASSERT(strcmp(data[i].before, data[i].after) == 0);
   }
@@ -138,7 +136,7 @@ static void *event_handler(enum mg_event event,
               "%s", (int) strlen(fetch_data), fetch_data);
     return "";
   } else if (event == MG_EVENT_LOG) {
-    printf("%s\n", request_info->log_message);
+    printf("%s\n", mg_get_log_message(conn));
   }
   
   return NULL;
@@ -196,11 +194,76 @@ static void test_mg_fetch(void) {
   mg_stop(ctx);
 }
 
+static void test_base64_encode(void) {
+  const char *in[] = {"a", "ab", "abc", "abcd", NULL};
+  const char *out[] = {"YQ==", "YWI=", "YWJj", "YWJjZA=="};
+  char buf[100];
+  int i;
+
+  for (i = 0; in[i] != NULL; i++) {
+    base64_encode((unsigned char *) in[i], strlen(in[i]), buf);
+    printf("[%s] [%s]\n", out[i], buf);
+    ASSERT(!strcmp(buf, out[i]));
+  }
+}
+
+static void test_mg_get_var(void) {
+  static const char *post[] = {"a=1&&b=2&d&=&c=3%20&e=", NULL};
+  char buf[20];
+  
+  ASSERT(mg_get_var(post[0], strlen(post[0]), "a", buf, sizeof(buf)) == 1);
+  ASSERT(buf[0] == '1' && buf[1] == '\0');
+  ASSERT(mg_get_var(post[0], strlen(post[0]), "b", buf, sizeof(buf)) == 1);
+  ASSERT(buf[0] == '2' && buf[1] == '\0');
+  ASSERT(mg_get_var(post[0], strlen(post[0]), "c", buf, sizeof(buf)) == 2);  
+  ASSERT(buf[0] == '3' && buf[1] == ' ' && buf[2] == '\0');
+  ASSERT(mg_get_var(post[0], strlen(post[0]), "e", buf, sizeof(buf)) == 0);
+  ASSERT(buf[0] == '\0');
+
+  ASSERT(mg_get_var(post[0], strlen(post[0]), "d", buf, sizeof(buf)) == -1);  
+  ASSERT(mg_get_var(post[0], strlen(post[0]), "c", buf, 2) == -1);  
+
+  ASSERT(mg_get_var(post[0], strlen(post[0]), "x", NULL, 10) == -2);
+  ASSERT(mg_get_var(post[0], strlen(post[0]), "x", buf, 0) == -2);
+}
+
+static void test_set_throttle(void) {
+  ASSERT(set_throttle(NULL, 0x0a000001, "/") == 0);
+  ASSERT(set_throttle("10.0.0.0/8=20", 0x0a000001, "/") == 20);
+  ASSERT(set_throttle("10.0.0.0/8=0.5k", 0x0a000001, "/") == 512);
+  ASSERT(set_throttle("10.0.0.0/8=17m", 0x0a000001, "/") == 1048576 * 17);
+  ASSERT(set_throttle("10.0.0.0/8=1x", 0x0a000001, "/") == 0);
+  ASSERT(set_throttle("10.0.0.0/8=5,0.0.0.0/0=10", 0x0a000001, "/") == 10);
+  ASSERT(set_throttle("10.0.0.0/8=5,/foo/**=7", 0x0a000001, "/index") == 5);
+  ASSERT(set_throttle("10.0.0.0/8=5,/foo/**=7", 0x0a000001, "/foo/x") == 7);
+  ASSERT(set_throttle("10.0.0.0/8=5,/foo/**=7", 0x0b000001, "/foxo/x") == 0);
+  ASSERT(set_throttle("10.0.0.0/8=5,*=1", 0x0b000001, "/foxo/x") == 1);
+}
+
+static void test_next_option(void) {
+  const char *p, *list = "x/8,/y**=1;2k,z";
+  struct vec a, b;
+  int i;
+
+  ASSERT(next_option(NULL, &a, &b) == NULL);
+  for (i = 0, p = list; (p = next_option(p, &a, &b)) != NULL; i++) {
+    ASSERT(i != 0 || (a.ptr == list && a.len == 3 && b.len == 0));
+    ASSERT(i != 1 || (a.ptr == list + 4 && a.len == 4 && b.ptr == list + 9 &&
+                      b.len == 4));
+
+    ASSERT(i != 2 || (a.ptr == list + 14 && a.len == 1 && b.len == 0));
+  }
+}
+
 int main(void) {
+  test_base64_encode();
   test_match_prefix();
   test_remove_double_dots();
   test_should_keep_alive();
   test_parse_http_request();
   test_mg_fetch();
+  test_mg_get_var();
+  test_set_throttle();
+  test_next_option();
   return 0;
 }
