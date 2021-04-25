@@ -146,8 +146,8 @@ if (scalar(@ARGV) > 0 and $ARGV[0] eq 'embedded') {
 }
 
 # Make sure we load config file if no options are given
-write_file($config, "listening_ports 12345\naccess_log_file access.log\n");
-spawn($exe);
+write_file($config, "listening_ports 12345\n");
+spawn("$exe -a access.log");
 my $saved_port = $port;
 $port = 12345;
 o("GET /test/hello.txt HTTP/1.0\n\n", 'HTTP/1.1 200 OK', 'Loading config file');
@@ -210,6 +210,8 @@ write_file($path, read_file($root . $dir_separator . 'env.cgi'));
 chmod 0755, $path;
 o("GET /$test_dir_uri/x/ HTTP/1.0\n\n", "Content-Type: text/html\r\n\r\n",
   'index.cgi execution');
+o("GET /$test_dir_uri/x/ HTTP/1.0\n\n",
+  "SCRIPT_FILENAME=test/test_dir/x/index.cgi", 'SCRIPT_FILENAME');
 o("GET /ta/x/ HTTP/1.0\n\n", "SCRIPT_NAME=/ta/x/index.cgi",
   'Aliases SCRIPT_NAME');
 #o("GET /hello.txt HTTP/1.1\n\n   GET /hello.txt HTTP/1.0\n\n",

@@ -201,7 +201,7 @@ typedef int SOCKET;
 
 #include "mongoose.h"
 
-#define MONGOOSE_VERSION "2.10"
+#define MONGOOSE_VERSION "2.11"
 #define PASSWORDS_FILE_NAME ".htpasswd"
 #define CGI_ENVIRONMENT_SIZE 4096
 #define MAX_CGI_ENVIR_VARS 64
@@ -210,8 +210,9 @@ typedef int SOCKET;
 #if defined(DEBUG)
 #define DEBUG_TRACE(x) do { \
   flockfile(stdout); \
-  printf("*** [%lu] thread %p: %s: ", \
-         (unsigned long) time(NULL), (void *) pthread_self(), __func__); \
+  printf("*** %lu.%p.%s.%d: ", \
+         (unsigned long) time(NULL), (void *) pthread_self(), \
+         __func__, __LINE__); \
   printf x; \
   putchar('\n'); \
   fflush(stdout); \
@@ -743,7 +744,6 @@ static void send_http_error(struct mg_connection *conn, int status,
   va_list ap;
   int len;
 
-  DEBUG_TRACE(("%d %s", status, reason));
   conn->request_info.status_code = status;
 
   if (call_user(conn, MG_HTTP_ERROR) == NULL) {
@@ -757,9 +757,10 @@ static void send_http_error(struct mg_connection *conn, int status,
       buf[len++] = '\n';
 
       va_start(ap, fmt);
-      mg_vsnprintf(conn, buf + len, sizeof(buf) - len, fmt, ap);
+      len += mg_vsnprintf(conn, buf + len, sizeof(buf) - len, fmt, ap);
       va_end(ap);
     }
+    DEBUG_TRACE(("[%s]", buf));
 
     mg_printf(conn, "HTTP/1.1 %d %s\r\n"
               "Content-Type: text/plain\r\n"
@@ -1097,7 +1098,7 @@ static pid_t spawn_process(struct mg_connection *conn, const char *prog,
                            char *envblk, char *envp[], int fd_stdin,
                            int fd_stdout, const char *dir) {
   HANDLE me;
-  char *p, *interp, cmdline[PATH_MAX], line[PATH_MAX];
+  char *p, *interp, cmdline[PATH_MAX], buf[PATH_MAX];
   FILE *fp;
   STARTUPINFOA si;
   PROCESS_INFORMATION pi;
@@ -1121,36 +1122,29 @@ static pid_t spawn_process(struct mg_connection *conn, const char *prog,
   // If CGI file is a script, try to read the interpreter line
   interp = conn->ctx->config[CGI_INTERPRETER];
   if (interp == NULL) {
-    line[2] = '\0';
-    (void) mg_snprintf(conn, cmdline, sizeof(cmdline), "%s%c%s",
-        dir, DIRSEP, prog);
+    buf[2] = '\0';
     if ((fp = fopen(cmdline, "r")) != NULL) {
-      (void) fgets(line, sizeof(line), fp);
-      if (memcmp(line, "#!", 2) != 0)
-        line[2] = '\0';
-      // Trim whitespaces from interpreter name
-      for (p = &line[strlen(line) - 1]; p > line &&
-          isspace(*p); p--) {
-        *p = '\0';
+      (void) fgets(buf, sizeof(buf), fp);
+      if (buf[0] != '#' || buf[1] != '!') {
+        // First line does not start with "#!". Do not set interpreter.
+        buf[2] = '\0';
+      } else {
+        // Trim whitespaces in interpreter name
+        for (p = &buf[strlen(buf) - 1]; p > buf && isspace(*p); p--) {
+          *p = '\0';
+        }
       }
       (void) fclose(fp);
     }
-    interp = line + 2;
+    interp = buf + 2;
   }
 
-  if ((p = (char *) strrchr(prog, '/')) != NULL) {
-    prog = p + 1;
-  }
-
-  (void) mg_snprintf(conn, cmdline, sizeof(cmdline), "%s%s%s",
-                     interp, interp[0] == '\0' ? "" : " ", prog);
-
-  (void) mg_snprintf(conn, line, sizeof(line), "%s", dir);
-  change_slashes_to_backslashes(line);
+  (void) mg_snprintf(conn, cmdline, sizeof(cmdline), "%s%s%s%c%s",
+                     interp, interp[0] == '\0' ? "" : " ", dir, DIRSEP, prog);
 
   DEBUG_TRACE(("Running [%s]", cmdline));
   if (CreateProcessA(NULL, cmdline, NULL, NULL, TRUE,
-        CREATE_NEW_PROCESS_GROUP, envblk, line, &si, &pi) == 0) {
+        CREATE_NEW_PROCESS_GROUP, envblk, dir, &si, &pi) == 0) {
     cry(conn, "%s: CreateProcess(%s): %d",
         __func__, cmdline, ERRNO);
     pi.hProcess = (pid_t) -1;
@@ -1527,7 +1521,7 @@ static void convert_uri_to_file_name(struct mg_connection *conn,
   change_slashes_to_backslashes(buf);
 #endif /* _WIN32 */
 
-  DEBUG_TRACE(("[%s] -> [%s]", uri, buf));
+  DEBUG_TRACE(("[%s] -> [%s], [%.*s]", uri, buf, (int) vec.len, vec.ptr));
 }
 
 static int sslize(struct mg_connection *conn, int (*func)(SSL *)) {
@@ -2742,18 +2736,13 @@ static char *addenv(struct cgi_env_block *block, const char *fmt, ...) {
 static void prepare_cgi_environment(struct mg_connection *conn,
                                     const char *prog,
                                     struct cgi_env_block *blk) {
-  const char *s, *script_filename, *slash;
+  const char *s, *slash;
   struct vec var_vec, root;
   char *p;
   int  i;
 
   blk->len = blk->nvars = 0;
   blk->conn = conn;
-
-  // SCRIPT_FILENAME
-  script_filename = prog;
-  if ((s = strrchr(prog, '/')) != NULL)
-    script_filename = s + 1;
 
   get_document_root(conn, &root);
 
@@ -2772,12 +2761,15 @@ static void prepare_cgi_environment(struct mg_connection *conn,
   addenv(blk, "REMOTE_PORT=%d", conn->request_info.remote_port);
   addenv(blk, "REQUEST_URI=%s", conn->request_info.uri);
 
+  // SCRIPT_NAME
+  assert(conn->request_info.uri[0] == '/');
   slash = strrchr(conn->request_info.uri, '/');
-  addenv(blk, "SCRIPT_NAME=%.*s%s",
-      (slash - conn->request_info.uri) + 1, conn->request_info.uri,
-      script_filename);
+  if ((s = strrchr(prog, '/')) == NULL)
+    s = prog;
+  addenv(blk, "SCRIPT_NAME=%.*s%s", slash - conn->request_info.uri,
+         conn->request_info.uri, s);
 
-  addenv(blk, "SCRIPT_FILENAME=%s", script_filename);
+  addenv(blk, "SCRIPT_FILENAME=%s", prog);
   addenv(blk, "PATH_TRANSLATED=%s", prog);
   addenv(blk, "HTTPS=%s", conn->ssl == NULL ? "off" : "on");
 
@@ -2850,10 +2842,15 @@ static void handle_cgi_request(struct mg_connection *conn, const char *prog) {
 
   prepare_cgi_environment(conn, prog, &blk);
 
-  // CGI must be executed in its own directory
+  // CGI must be executed in its own directory. 'dir' must point to the
+  // directory containing executable program, 'p' must point to the
+  // executable program name relative to 'dir'.
   (void) mg_snprintf(conn, dir, sizeof(dir), "%s", prog);
   if ((p = strrchr(dir, DIRSEP)) != NULL) {
     *p++ = '\0';
+  } else {
+    dir[0] = '.', dir[1] = '\0';
+    p = (char *) prog;
   }
 
   pid = (pid_t) -1;
@@ -2898,8 +2895,8 @@ static void handle_cgi_request(struct mg_connection *conn, const char *prog) {
       buf, sizeof(buf), &data_len);
   if (headers_len <= 0) {
     send_http_error(conn, 500, http_500_error,
-        "CGI program sent malformed HTTP headers: [%.*s]",
-        data_len, buf);
+                    "CGI program sent malformed HTTP headers: [%.*s]",
+                    data_len, buf);
     goto done;
   }
   pbuf = buf;
@@ -2928,6 +2925,9 @@ static void handle_cgi_request(struct mg_connection *conn, const char *prog) {
 done:
   if (pid != (pid_t) -1) {
     kill(pid, SIGKILL);
+#if !defined(_WIN32)
+    do {} while (waitpid(-1, &i, WNOHANG) > 0);
+#endif
   }
   if (fd_stdin[0] != -1) {
     (void) close(fd_stdin[0]);
@@ -3960,6 +3960,11 @@ static void free_context(struct mg_context *ctx) {
   if (ctx->ssl_ctx != NULL) {
     SSL_CTX_free(ctx->ssl_ctx);
   }
+#ifndef NO_SSL
+  if (ssl_mutexes != NULL) {
+    free(ssl_mutexes);
+  }
+#endif // !NO_SSL
 
   // Deallocate context itself
   free(ctx);
@@ -3994,7 +3999,7 @@ struct mg_context *mg_start(mg_callback_t user_callback, const char **options) {
   ctx = calloc(1, sizeof(*ctx));
   ctx->user_callback = user_callback;
 
-  while ((name = *options++) != NULL) {
+  while (options && (name = *options++) != NULL) {
     if ((i = get_option_index(name)) == -1) {
       cry(fc(ctx), "Invalid option: %s", name);
       free_context(ctx);

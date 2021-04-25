@@ -56,25 +56,16 @@
 #define MAX_OPTIONS 40
 
 static int exit_flag;
-static char *options[MAX_OPTIONS];
-static char server_name[40];
-static char *config_file;
-static struct mg_context *ctx;
+static char server_name[40];        // Set by init_server_name()
+static char config_file[PATH_MAX];  // Set by process_command_line_arguments()
+static struct mg_context *ctx;      // Set by start_mongoose()
 
 #if !defined(CONFIG_FILE)
 #define CONFIG_FILE "mongoose.conf"
 #endif /* !CONFIG_FILE */
 
 static void WINCDECL signal_handler(int sig_num) {
-#if !defined(_WIN32)
-  if (sig_num == SIGCHLD) {
-    do {
-    } while (waitpid(-1, &sig_num, WNOHANG) > 0);
-  } else
-#endif /* !_WIN32 */
-  {
-    exit_flag = sig_num;
-  }
+  exit_flag = sig_num;
 }
 
 static void die(const char *fmt, ...) {
@@ -179,38 +170,40 @@ static void set_option(char **options, const char *name, const char *value) {
 }
 
 static void process_command_line_arguments(char *argv[], char **options) {
-  char line[512], opt[512], val[512], path[PATH_MAX], *p;
+  char line[512], opt[512], val[512], *p;
   FILE *fp = NULL;
   size_t i, line_no = 0;
 
-  /* Should we use a config file ? */
+  options[0] = NULL;
+
+  // Should we use a config file ?
   if (argv[1] != NULL && argv[2] == NULL) {
-    config_file = argv[1];
+    snprintf(config_file, sizeof(config_file), "%s", argv[1]);
   } else if ((p = strrchr(argv[0], DIRSEP)) == NULL) {
     // No command line flags specified. Look where binary lives
-    config_file = CONFIG_FILE;
+    snprintf(config_file, sizeof(config_file), "%s", CONFIG_FILE);
   } else {
-    snprintf(path, sizeof(path), "%.*s%c%s",
+    snprintf(config_file, sizeof(config_file), "%.*s%c%s",
              (int) (p - argv[0]), argv[0], DIRSEP, CONFIG_FILE);
-    config_file = path;
   }
 
   fp = fopen(config_file, "r");
 
-  /* If config file was set in command line and open failed, exit */
+  // If config file was set in command line and open failed, exit
   if (argv[1] != NULL && argv[2] == NULL && fp == NULL) {
     die("Cannot open config file %s: %s", config_file, strerror(errno));
   }
 
+  // Load config file settings first
   if (fp != NULL) {
     fprintf(stderr, "Loading config file %s\n", config_file);
 
-    /* Loop over the lines in config file */
+    // Loop over the lines in config file
     while (fgets(line, sizeof(line), fp) != NULL) {
 
       line_no++;
 
-      /* Ignore empty lines and comments */
+      // Ignore empty lines and comments
       if (line[0] == '#' || line[0] == '\n')
         continue;
 
@@ -221,13 +214,14 @@ static void process_command_line_arguments(char *argv[], char **options) {
     }
 
     (void) fclose(fp);
-  } else {
-    for (i = 1; argv[i] != NULL; i += 2) {
-      if (argv[i][0] != '-' || argv[i + 1] == NULL) {
-        show_usage_and_exit();
-      }
-      set_option(options, &argv[i][1], argv[i + 1]);
+  }
+
+  // Now handle command line flags. They override config file settings.
+  for (i = 1; argv[i] != NULL; i += 2) {
+    if (argv[i][0] != '-' || argv[i + 1] == NULL) {
+      show_usage_and_exit();
     }
+    set_option(options, &argv[i][1], argv[i + 1]);
   }
 }
 
@@ -237,6 +231,7 @@ static void init_server_name(void) {
 }
 
 static void start_mongoose(int argc, char *argv[]) {
+  char *options[MAX_OPTIONS];
   int i;
 
   /* Edit passwords file if -A option is specified */
@@ -257,9 +252,6 @@ static void start_mongoose(int argc, char *argv[]) {
   process_command_line_arguments(argv, options);
 
   /* Setup signal handler: quit on Ctrl-C */
-#ifndef _WIN32
-  signal(SIGCHLD, signal_handler);
-#endif /* _WIN32 */
   signal(SIGTERM, signal_handler);
   signal(SIGINT, signal_handler);
 
@@ -279,6 +271,7 @@ static void start_mongoose(int argc, char *argv[]) {
 #ifdef _WIN32
 static SERVICE_STATUS ss;
 static SERVICE_STATUS_HANDLE hStatus;
+static const char *service_magic_argument = "--";
 
 static void WINAPI ControlHandler(DWORD code) {
   if (code == SERVICE_CONTROL_STOP || code == SERVICE_CONTROL_SHUTDOWN) {
@@ -342,22 +335,75 @@ static void edit_config_file(void) {
   WinExec(cmd, SW_SHOW);
 }
 
+static void show_error(void) {
+  char buf[256];
+  FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                NULL, GetLastError(),
+                MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+                buf, sizeof(buf), NULL);
+  MessageBox(NULL, buf, "Error", MB_OK);
+}
+
+static int manage_service(int action) {
+  static const char *service_name = "Mongoose";
+  SC_HANDLE hSCM = NULL, hService = NULL;
+  SERVICE_DESCRIPTION descr = {server_name};
+  char path[PATH_MAX + 20];  // Path to executable plus magic argument
+  int success = 1;
+
+  if ((hSCM = OpenSCManager(NULL, NULL, action == ID_INSTALL_SERVICE ?
+                            GENERIC_WRITE : GENERIC_READ)) == NULL) {
+    success = 0;
+    show_error();
+  } else if (action == ID_INSTALL_SERVICE) {
+    GetModuleFileName(NULL, path, sizeof(path));
+    strncat(path, " ", sizeof(path));
+    strncat(path, service_magic_argument, sizeof(path));
+    hService = CreateService(hSCM, service_name, service_name,
+                             SERVICE_ALL_ACCESS, SERVICE_WIN32_OWN_PROCESS,
+                             SERVICE_AUTO_START, SERVICE_ERROR_NORMAL,
+                             path, NULL, NULL, NULL, NULL, NULL);
+    if (hService) {
+      ChangeServiceConfig2(hService, SERVICE_CONFIG_DESCRIPTION, &descr);
+    } else {
+      show_error();
+    }
+  } else if (action == ID_REMOVE_SERVICE) {
+    if ((hService = OpenService(hSCM, service_name, DELETE)) == NULL ||
+        !DeleteService(hService)) {
+      show_error();
+    }
+  } else if ((hService = OpenService(hSCM, service_name,
+                                     SERVICE_QUERY_STATUS)) == NULL) {
+    success = 0;
+  }
+
+  CloseServiceHandle(hService);
+  CloseServiceHandle(hSCM);
+
+  return success;
+}
+
 static LRESULT CALLBACK WindowProc(HWND hWnd, UINT msg, WPARAM wParam,
                                    LPARAM lParam) {
   static SERVICE_TABLE_ENTRY service_table[] = {
     {server_name, (LPSERVICE_MAIN_FUNCTION) ServiceMain},
     {NULL, NULL}
   };
+  int service_installed;
+  char buf[200], *service_argv[] = {__argv[0], NULL};
   POINT pt;
   HMENU hMenu;
 
   switch (msg) {
     case WM_CREATE:
-      // Win32 runtime must prepare __argc and __argv for us
-      start_mongoose(__argc, __argv);
-      // TODO(lsm): figure out why this executes long time
-      if (StartServiceCtrlDispatcher(service_table)) {
+      if (__argv[1] != NULL &&
+          !strcmp(__argv[1], service_magic_argument)) {
+        start_mongoose(1, service_argv);
+        StartServiceCtrlDispatcher(service_table);
         exit(EXIT_SUCCESS);
+      } else {
+        start_mongoose(__argc, __argv);
       }
       break;
     case WM_COMMAND:
@@ -370,6 +416,10 @@ static LRESULT CALLBACK WindowProc(HWND hWnd, UINT msg, WPARAM wParam,
         case ID_EDIT_CONFIG:
           edit_config_file();
           break;
+        case ID_INSTALL_SERVICE:
+        case ID_REMOVE_SERVICE:
+          manage_service(LOWORD(wParam));
+          break;
       }
       break;
     case WM_USER:
@@ -380,17 +430,21 @@ static LRESULT CALLBACK WindowProc(HWND hWnd, UINT msg, WPARAM wParam,
           hMenu = CreatePopupMenu();
           AppendMenu(hMenu, MF_STRING | MF_GRAYED, ID_SEPARATOR, server_name);
           AppendMenu(hMenu, MF_SEPARATOR, ID_SEPARATOR, "");
-#if 0
-          AppendMenu(hMenu, MF_STRING | MF_GRAYED, ID_SEPARATOR,
-                     "NT service: not installed");
-          AppendMenu(hMenu, MF_STRING, ID_INSTALL_SERVICE, "Install");
-          AppendMenu(hMenu, MF_STRING, ID_REMOVE_SERVICE, "Deinstall");
+          service_installed = manage_service(0);
+          snprintf(buf, sizeof(buf), "NT service: %s installed",
+                   service_installed ? "" : "not");
+          AppendMenu(hMenu, MF_STRING | MF_GRAYED, ID_SEPARATOR, buf);
+          AppendMenu(hMenu, MF_STRING | (service_installed ? MF_GRAYED : 0),
+                     ID_INSTALL_SERVICE, "Install");
+          AppendMenu(hMenu, MF_STRING | (!service_installed ? MF_GRAYED : 0),
+                     ID_REMOVE_SERVICE, "Deinstall");
           AppendMenu(hMenu, MF_SEPARATOR, ID_SEPARATOR, "");
-#endif
           AppendMenu(hMenu, MF_STRING, ID_EDIT_CONFIG, "Edit config file");
           AppendMenu(hMenu, MF_STRING, ID_QUIT, "Exit");
           GetCursorPos(&pt);
+          SetForegroundWindow(hWnd);
           TrackPopupMenu(hMenu, 0, pt.x, pt.y, 0, hWnd, NULL);
+          PostMessage(hWnd, WM_NULL, 0, 0);
           DestroyMenu(hMenu);
           break;
       }
