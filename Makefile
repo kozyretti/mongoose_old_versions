@@ -52,16 +52,50 @@ solaris:
 #  o  Run "PATH_TO_VC6\bin\nmake windows"
 
 VC=	z:
-#DBG=	/Zi /DDEBUG /Od /DDEBUG
-DBG=	/DNDEBUG /Os
-SSL=	y:\release\cyassl.lib crypt32.lib advapi32.lib
-CL=	cl /MD /TC /nologo $(DBG) /DNO_SSL_DL /I $(VC)\include
-LINK=	/link /incremental:no /libpath:$(VC)\lib ws2_32.lib $(SSL)
+CYA=	y:
+#DBG=	/Zi /DDEBUG /Od
+DBG=	/DNDEBUG /O1
+CL=	cl /MD /TC /nologo $(DBG) /Gz /W3 /DNO_SSL_DL
+GUILIB=	user32.lib shell32.lib
+LINK=	/link /incremental:no /libpath:$(VC)\lib /subsystem:windows \
+	ws2_32.lib advapi32.lib cyassl.lib
+
+CYAFL=	/c /I $(CYA)\ctaocrypt\include /I $(CYA)\include /D_LIB
+
+CYASRC= $(CYA)/src/cyassl_int.c \
+	$(CYA)/src/cyassl_io.c \
+	$(CYA)/src/keys.c \
+	$(CYA)/src/tls.c \
+	$(CYA)/ctaocrypt/src/aes.c \
+	$(CYA)/ctaocrypt/src/arc4.c \
+	$(CYA)/ctaocrypt/src/asn.c \
+	$(CYA)/ctaocrypt/src/des3.c \
+	$(CYA)/ctaocrypt/src/dh.c \
+	$(CYA)/ctaocrypt/src/dsa.c \
+	$(CYA)/ctaocrypt/src/hc128.c \
+	$(CYA)/ctaocrypt/src/hmac.c \
+	$(CYA)/ctaocrypt/src/integer.c \
+	$(CYA)/ctaocrypt/src/md4.c \
+	$(CYA)/ctaocrypt/src/md5.c \
+	$(CYA)/ctaocrypt/src/misc.c \
+	$(CYA)/ctaocrypt/src/rabbit.c \
+	$(CYA)/ctaocrypt/src/random.c \
+	$(CYA)/ctaocrypt/src/ripemd.c \
+	$(CYA)/ctaocrypt/src/rsa.c \
+	$(CYA)/ctaocrypt/src/sha.c \
+	$(CYA)/ctaocrypt/src/sha256.c
+
+cyassl:
+	$(CL) $(CYA)/src/ssl.c $(CYA)/ctaocrypt/src/coding.c \
+		$(CYAFL) /DOPENSSL_EXTRA
+	$(CL) $(CYASRC) $(CYAFL)
+	lib *.obj /out:cyassl.lib
 
 windows:
-	$(CL) main.c mongoose.c $(LINK) /DLL /DEF:win32\dll.def \
-		/out:_$(PROG).dll
-	$(CL) main.c mongoose.c $(LINK) /out:$(PROG).exe
+	rc win32\res.rc
+	$(CL) main.c mongoose.c /GA $(LINK) win32\res.res \
+		$(GUILIB) /out:$(PROG).exe
+	$(CL) mongoose.c /GD $(LINK) /DLL /DEF:win32\dll.def /out:_$(PROG).dll
 
 # Build for Windows under MinGW
 #MINGWDBG= -DDEBUG -O0
