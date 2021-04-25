@@ -19,7 +19,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  *
- * $Id: embed.c 168 2008-12-24 10:50:56Z valenok $
+ * $Id: embed.c 223 2009-02-07 18:27:10Z valenok $
  * Unit test for the mongoose web server. Tests embedded API.
  */
 
@@ -48,7 +48,8 @@ test_get_var(struct mg_connection *conn, const struct mg_request_info *ri,
 
 	value = mg_get_var(conn, "my_var");
 	if (value != NULL) {
-		mg_printf(conn, "Value: [%s]", value);
+		mg_printf(conn, "Value: [%s]\n", value);
+		mg_printf(conn, "Value size: [%u]\n", (unsigned) strlen(value));
 		free(value);
 	}
 }
@@ -60,6 +61,16 @@ test_get_header(struct mg_connection *conn, const struct mg_request_info *ri,
 	const char *value;
 
 	mg_printf(conn, "%s", standard_reply);
+
+	{
+		int	i;
+		printf("HTTP headers: %d\n", ri->num_headers);
+		for (i = 0; i < ri->num_headers; i++)
+			printf("[%s]: [%s]\n",
+					ri->http_headers[i].name,
+					ri->http_headers[i].value);
+	}
+
 
 	value = mg_get_header(conn, "Host");
 	if (value != NULL)

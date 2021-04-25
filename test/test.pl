@@ -15,6 +15,7 @@ my $pid = undef;
 my $num_requests;
 my $root = 'test';
 my $dir_separator = on_windows() ? '\\' : '/';
+my $copy_cmd = on_windows() ? 'copy' : 'cp';
 my $test_dir_uri = "test_dir";
 my $test_dir = $root . $dir_separator. $test_dir_uri;
 my $alias = "/aliased=/etc/,/ta=$test_dir";
@@ -187,6 +188,12 @@ o("GET /not-exist HTTP/1.0\r\n\n", 'HTTP/1.1 404', 'Not existent file');
 o("GET /hello.txt HTTP/1.1\n\nGET /hello.txt HTTP/1.0\n\n",
 	'HTTP/1.1 200.+keep-alive.+HTTP/1.1 200.+close',
 	'Request pipelining', 2);
+mkdir $test_dir . $dir_separator . 'x';
+my $path = $test_dir . $dir_separator . 'x' . $dir_separator . 'index.cgi';
+write_file($path, read_file($root . $dir_separator . 'env.cgi'));
+chmod 0755, $path;
+o("GET /$test_dir_uri/x/ HTTP/1.0\n\n", "Content-Type: text/html\r\n\r\n",
+		'index.cgi execution');
 
 my $mime_types = {
 	html => 'text/html',
@@ -196,6 +203,7 @@ my $mime_types = {
 	js => 'application/x-javascript',
 	css => 'text/css',
 	jpg => 'image/jpeg',
+	c => 'text/plain',
 };
 
 foreach my $key (keys %$mime_types) {
@@ -380,6 +388,11 @@ sub do_embedded_test {
 	# + in form data MUST be decoded to space	
 	o("POST /test_get_var HTTP/1.0\nContent-Length: 10\n\n".
 		"my_var=b+c", 'Value: \[b c\]', 'mg_get_var 7', 0);
+
+	# Test that big POSTed vars are not truncated
+	my $my_var = 'x' x 64000;
+	o("POST /test_get_var HTTP/1.0\nContent-Length: 64007\n\n".
+		"my_var=$my_var", 'Value size: \[64000\]', 'mg_get_var 8', 0);
 	
 		
 	o("POST /test_get_request_info?xx=yy HTTP/1.0\nFoo: bar\n".
