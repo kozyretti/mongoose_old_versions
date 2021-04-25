@@ -231,7 +231,7 @@ typedef int SOCKET;
 #include <lauxlib.h>
 #endif
 
-#define MONGOOSE_VERSION "3.4"
+#define MONGOOSE_VERSION "3.5"
 #define PASSWORDS_FILE_NAME ".htpasswd"
 #define CGI_ENVIRONMENT_SIZE 4096
 #define MAX_CGI_ENVIR_VARS 64
@@ -1032,31 +1032,14 @@ static void to_unicode(const char *path, wchar_t *wbuf, size_t wbuf_len) {
   // Point p to the end of the file name
   p = buf + strlen(buf) - 1;
 
-  // Trim trailing backslash character
-  while (p > buf && *p == '\\' && p[-1] != ':') {
-    *p-- = '\0';
-  }
-
-   // Protect from CGI code disclosure.
-   // This is very nasty hole. Windows happily opens files with
-   // some garbage in the end of file name. So fopen("a.cgi    ", "r")
-   // actually opens "a.cgi", and does not return an error!
-  if (*p == 0x20 ||               // No space at the end
-      (*p == 0x2e && p > buf) ||  // No '.' but allow '.' as full path
-      *p == 0x2b ||               // No '+'
-      (*p & ~0x7f)) {             // And generally no non-ASCII chars
-    (void) fprintf(stderr, "Rejecting suspicious path: [%s]", buf);
+  // Convert to Unicode and back. If doubly-converted string does not
+  // match the original, something is fishy, reject.
+  memset(wbuf, 0, wbuf_len * sizeof(wchar_t));
+  MultiByteToWideChar(CP_UTF8, 0, buf, -1, wbuf, (int) wbuf_len);
+  WideCharToMultiByte(CP_UTF8, 0, wbuf, (int) wbuf_len, buf2, sizeof(buf2),
+                      NULL, NULL);
+  if (strcmp(buf, buf2) != 0) {
     wbuf[0] = L'\0';
-  } else {
-    // Convert to Unicode and back. If doubly-converted string does not
-    // match the original, something is fishy, reject.
-    memset(wbuf, 0, wbuf_len * sizeof(wchar_t));
-    MultiByteToWideChar(CP_UTF8, 0, buf, -1, wbuf, (int) wbuf_len);
-    WideCharToMultiByte(CP_UTF8, 0, wbuf, (int) wbuf_len, buf2, sizeof(buf2),
-                        NULL, NULL);
-    if (strcmp(buf, buf2) != 0) {
-      wbuf[0] = L'\0';
-    }
   }
 }
 
@@ -1126,6 +1109,16 @@ static int mg_rename(const char* oldname, const char* newname) {
   return MoveFileW(woldbuf, wnewbuf) ? 0 : -1;
 }
 
+// Windows happily opens files with some garbage at the end of file name.
+// For example, fopen("a.cgi    ", "r") on Windows successfully opens
+// "a.cgi", despite one would expect an error back.
+// This function returns non-0 if path ends with some garbage.
+static int path_cannot_disclose_cgi(const char *path) {
+  static const char *allowed_last_characters = "_-";
+  int last = path[strlen(path) - 1];
+  return isalnum(last) || strchr(allowed_last_characters, last) != NULL;
+}
+
 static int mg_stat(struct mg_connection *conn, const char *path,
                    struct file *filep) {
   wchar_t wbuf[PATH_MAX];
@@ -1139,6 +1132,12 @@ static int mg_stat(struct mg_connection *conn, const char *path,
           info.ftLastWriteTime.dwLowDateTime,
           info.ftLastWriteTime.dwHighDateTime);
       filep->is_directory = info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY;
+      // If file name is fishy, reset the file structure and return error.
+      // Note it is important to reset, not just return the error, cause
+      // functions like is_file_opened() check the struct.
+      if (!filep->is_directory && !path_cannot_disclose_cgi(path)) {
+        memset(filep, 0, sizeof(*filep));
+      }
     }
   }
 
@@ -1694,7 +1693,7 @@ int mg_get_var(const char *data, size_t data_len, const char *name,
 
         // Decode variable into destination buffer
         len = url_decode(p, (size_t)(s - p), dst, dst_len, 1);
-        
+
         // Redirect error code from -1 to -2 (destination buffer too small).
         if (len == -1) {
           len = -2;
@@ -1984,6 +1983,11 @@ static void get_mime_type(struct mg_context *ctx, const char *path,
   vec->len = strlen(vec->ptr);
 }
 
+static int is_big_endian(void) {
+  static const int n = 1;
+  return ((char *) &n)[0] == 0;
+}
+
 #ifndef HAVE_MD5
 typedef struct MD5Context {
   uint32_t buf[4];
@@ -1992,9 +1996,10 @@ typedef struct MD5Context {
 } MD5_CTX;
 
 static void byteReverse(unsigned char *buf, unsigned longs) {
-  static const int endianess_check = 1;
   uint32_t t;
-  if (((char *) &endianess_check)[0] == 1) {
+
+  // Forrest: MD5 expect LITTLE_ENDIAN, swap if BIG_ENDIAN
+  if (is_big_endian()) {
     do {
       t = (uint32_t) ((unsigned) buf[3] << 8 | buf[2]) << 16 |
         ((unsigned) buf[1] << 8 | buf[0]);
@@ -3633,8 +3638,8 @@ union char64long16 { unsigned char c[64]; uint32_t l[16]; };
 #define rol(value, bits) (((value) << (bits)) | ((value) >> (32 - (bits))))
 
 static uint32_t blk0(union char64long16 *block, int i) {
-  static const int endianess_check = 1;
-  if (((char *) &endianess_check)[0] == 1) {
+  // Forrest: SHA expect BIG_ENDIAN, swap if LITTLE_ENDIAN
+  if (!is_big_endian()) {
     block->l[i] = (rol(block->l[i], 24) & 0xFF00FF00) |
       (rol(block->l[i], 8) & 0x00FF00FF);
   }
@@ -4627,9 +4632,12 @@ static void reset_per_request_attributes(struct mg_connection *conn) {
 }
 
 static void close_socket_gracefully(struct mg_connection *conn) {
+#if defined(_WIN32)
   char buf[MG_BUF_LEN];
+  int n;
+#endif
   struct linger linger;
-  int n, sock = conn->client.sock;
+  int sock = conn->client.sock;
 
   // Set linger option to avoid socket hanging out after close. This prevent
   // ephemeral port exhaust problem under high QPS.
@@ -4641,6 +4649,7 @@ static void close_socket_gracefully(struct mg_connection *conn) {
   (void) shutdown(sock, SHUT_WR);
   set_non_blocking_mode(sock);
 
+#if defined(_WIN32)
   // Read and discard pending incoming data. If we do not do that and close the
   // socket, the data in the send buffer may be discarded. This
   // behaviour is seen on Windows, when client keeps sending data
@@ -4649,6 +4658,7 @@ static void close_socket_gracefully(struct mg_connection *conn) {
   do {
     n = pull(NULL, conn, buf, sizeof(buf));
   } while (n > 0);
+#endif
 
   // Now we know that our FIN is ACK-ed, safe to close
   (void) closesocket(sock);
