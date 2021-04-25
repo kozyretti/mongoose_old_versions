@@ -8,3 +8,21 @@ all:
 	  $(CC) $(CFLAGS) post.c ../mongoose.c  $$LIBS $(ADD) -o post;
 	  $(CC) $(CFLAGS) -DUSE_WEBSOCKET websocket.c ../mongoose.c  $$LIBS $(ADD) -o websocket;
 	  $(CC) $(CFLAGS) chat.c ../mongoose.c  $$LIBS $(ADD) -o chat
+
+
+MSVC    = e:/vc6
+CL      = $(MSVC)/bin/cl
+CLFLAGS = /MD /TC /nologo $(DBG) /W3 /DNO_SSL \
+        /I$(MSVC)/include /I.. /Dsnprintf=_snprintf \
+        /link /incremental:no /libpath:$(MSVC)/lib /machine:IX86
+
+windows:
+	$(CL) upload.c ../mongoose.c $(CLFLAGS)
+	$(CL) hello.c ../mongoose.c $(CLFLAGS)
+	$(CL) upload.c ../mongoose.c $(CLFLAGS)
+	$(CL) post.c ../mongoose.c $(CLFLAGS)
+	$(CL) post.c ../mongoose.c $(CLFLAGS)
+	$(CL) /DUSE_WEBSOCKET websocket.c ../mongoose.c $(CLFLAGS)
+
+clean:
+	rm -rf hello hello.exe upload upload.exe post post.exe websocket websocket.exe chat chat.exe *.dSYM *.obj

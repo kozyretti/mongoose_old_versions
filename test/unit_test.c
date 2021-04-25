@@ -7,6 +7,8 @@
 } while (0)
 #define ASSERT(expr) do { if (!(expr)) FATAL(#expr, __LINE__); } while (0)
 
+#define UNUSED_PORT "33796"
+
 static void test_parse_http_request() {
   struct mg_request_info ri;
   char req1[] = "GET / HTTP/1.1\r\n\r\n";
@@ -31,7 +33,7 @@ static void test_parse_http_request() {
   ASSERT(strcmp(ri.http_headers[2].name, "baz\r\n\r") == 0);
   ASSERT(strcmp(ri.http_headers[2].value, "") == 0);
 
-  // TODO(lsm): add more tests. 
+  // TODO(lsm): add more tests.
 }
 
 static void test_should_keep_alive(void) {
@@ -126,52 +128,61 @@ static void test_remove_double_dots() {
 }
 
 static const char *fetch_data = "hello world!\n";
-static void *event_handler(enum mg_event event,
-                           struct mg_connection *conn) {
+static const char *inmemory_file_data = "hi there";
+static void *event_handler(enum mg_event event, struct mg_connection *conn) {
   const struct mg_request_info *request_info = mg_get_request_info(conn);
+
   if (event == MG_NEW_REQUEST && !strcmp(request_info->uri, "/data")) {
     mg_printf(conn, "HTTP/1.1 200 OK\r\n"
               "Content-Length: %d\r\n"
               "Content-Type: text/plain\r\n\r\n"
               "%s", (int) strlen(fetch_data), fetch_data);
     return "";
+  } else if (event == MG_OPEN_FILE) {
+    const char *path = request_info->ev_data;
+    printf("%s: [%s]\n", __func__, path);
+    if (strcmp(path, "./blah") == 0) {
+      mg_get_request_info(conn)->ev_data =
+        (void *) (int) strlen(inmemory_file_data);
+      return (void *) inmemory_file_data;
+    }
   } else if (event == MG_EVENT_LOG) {
-    printf("%s\n", mg_get_log_message(conn));
+    printf("%s\n", (const char *) mg_get_request_info(conn)->ev_data);
   }
-  
+
   return NULL;
 }
 
 static void test_mg_fetch(void) {
   static const char *options[] = {
     "document_root", ".",
-    "listening_ports", "33796",
+    "listening_ports", UNUSED_PORT,
     NULL,
   };
   char buf[2000], buf2[2000];
-  int length;
+  int n, length;
   struct mg_context *ctx;
   struct mg_request_info ri;
   const char *tmp_file = "temporary_file_name_for_unit_test.txt";
-  struct mgstat st;
+  struct file file;
   FILE *fp;
 
   ASSERT((ctx = mg_start(event_handler, NULL, options)) != NULL);
 
   // Failed fetch, pass invalid URL
   ASSERT(mg_fetch(ctx, "localhost", tmp_file, buf, sizeof(buf), &ri) == NULL);
-  ASSERT(mg_fetch(ctx, "localhost:33796", tmp_file,
+  ASSERT(mg_fetch(ctx, "localhost:" UNUSED_PORT, tmp_file,
                   buf, sizeof(buf), &ri) == NULL);
   ASSERT(mg_fetch(ctx, "http://$$$.$$$", tmp_file,
                   buf, sizeof(buf), &ri) == NULL);
 
   // Failed fetch, pass invalid file name
-  ASSERT(mg_fetch(ctx, "http://localhost:33796/data",
+  ASSERT(mg_fetch(ctx, "http://localhost:" UNUSED_PORT "/data",
                   "/this/file/must/not/exist/ever",
                   buf, sizeof(buf), &ri) == NULL);
 
   // Successful fetch
-  ASSERT((fp = mg_fetch(ctx, "http://localhost:33796/data",
+  ASSERT((fp = mg_fetch(ctx, "http://localhost:" UNUSED_PORT "/data",
                         tmp_file, buf, sizeof(buf), &ri)) != NULL);
   ASSERT(ri.num_headers == 2);
   ASSERT(!strcmp(ri.request_method, "HTTP/1.1"));
@@ -184,11 +195,30 @@ static void test_mg_fetch(void) {
   fclose(fp);
 
   // Fetch big file, mongoose.c
-  ASSERT((fp = mg_fetch(ctx, "http://localhost:33796/mongoose.c",
+  ASSERT((fp = mg_fetch(ctx, "http://localhost:" UNUSED_PORT "/mongoose.c",
                         tmp_file, buf, sizeof(buf), &ri)) != NULL);
-  ASSERT(mg_stat("mongoose.c", &st) == 0);
-  ASSERT(st.size == ftell(fp));
+  ASSERT(mg_stat(fc(ctx), "mongoose.c", &file));
+  ASSERT(file.size == ftell(fp));
   ASSERT(!strcmp(ri.request_method, "HTTP/1.1"));
+
+  // Fetch nonexistent file, /blah
+  ASSERT((fp = mg_fetch(ctx, "http://localhost:" UNUSED_PORT "/boo",
+                        tmp_file, buf, sizeof(buf), &ri)) != NULL);
+  ASSERT(!mg_strcasecmp(ri.uri, "404"));
+  fclose(fp);
+
+  // Fetch existing inmemory file
+  ASSERT((fp = mg_fetch(ctx, "http://localhost:" UNUSED_PORT "/blah",
+                        tmp_file, buf, sizeof(buf), &ri)) != NULL);
+  ASSERT(!mg_strcasecmp(ri.uri, "200"));
+  n = ftell(fp);
+  fseek(fp, 0, SEEK_SET);
+  printf("%s %d %d [%.*s]\n", __func__, n, (int) feof(fp), n, buf2);
+  n = fread(buf2, 1, n, fp);
+  printf("%s %d %d [%.*s]\n", __func__, n, (int) feof(fp), n, buf2);
+  ASSERT((size_t) ftell(fp) == (size_t) strlen(inmemory_file_data));
+  ASSERT(!memcmp(inmemory_file_data, buf2, ftell(fp)));
+  fclose(fp);
 
   remove(tmp_file);
   mg_stop(ctx);
@@ -208,23 +238,29 @@ static void test_base64_encode(void) {
 }
 
 static void test_mg_get_var(void) {
-  static const char *post[] = {"a=1&&b=2&d&=&c=3%20&e=", NULL};
+  static const char *post[] = {
+    "a=1&&b=2&d&=&c=3%20&e=",
+    "q=&st=2012%2F11%2F13+17%3A05&et=&team_id=",
+    NULL
+  };
   char buf[20];
-  
+
   ASSERT(mg_get_var(post[0], strlen(post[0]), "a", buf, sizeof(buf)) == 1);
   ASSERT(buf[0] == '1' && buf[1] == '\0');
   ASSERT(mg_get_var(post[0], strlen(post[0]), "b", buf, sizeof(buf)) == 1);
   ASSERT(buf[0] == '2' && buf[1] == '\0');
-  ASSERT(mg_get_var(post[0], strlen(post[0]), "c", buf, sizeof(buf)) == 2);  
+  ASSERT(mg_get_var(post[0], strlen(post[0]), "c", buf, sizeof(buf)) == 2);
   ASSERT(buf[0] == '3' && buf[1] == ' ' && buf[2] == '\0');
   ASSERT(mg_get_var(post[0], strlen(post[0]), "e", buf, sizeof(buf)) == 0);
   ASSERT(buf[0] == '\0');
 
-  ASSERT(mg_get_var(post[0], strlen(post[0]), "d", buf, sizeof(buf)) == -1);  
-  ASSERT(mg_get_var(post[0], strlen(post[0]), "c", buf, 2) == -1);  
+  ASSERT(mg_get_var(post[0], strlen(post[0]), "d", buf, sizeof(buf)) == -1);
+  ASSERT(mg_get_var(post[0], strlen(post[0]), "c", buf, 2) == -2);
 
   ASSERT(mg_get_var(post[0], strlen(post[0]), "x", NULL, 10) == -2);
   ASSERT(mg_get_var(post[0], strlen(post[0]), "x", buf, 0) == -2);
+  ASSERT(mg_get_var(post[1], strlen(post[1]), "st", buf, 16) == -2);
+  ASSERT(mg_get_var(post[1], strlen(post[1]), "st", buf, 17) == 16);
 }
 
 static void test_set_throttle(void) {
@@ -255,6 +291,95 @@ static void test_next_option(void) {
   }
 }
 
+#ifdef USE_LUA
+static void check_lua_expr(lua_State *L, const char *expr, const char *value) {
+  const char *v, *var_name = "myVar";
+  char buf[100];
+
+  snprintf(buf, sizeof(buf), "%s = %s", var_name, expr);
+  luaL_dostring(L, buf);
+  lua_getglobal(L, var_name);
+  v = lua_tostring(L, -1);
+  printf("%s: %s: [%s] [%s]\n", __func__, expr, v == NULL ? "null" : v, value);
+  ASSERT((value == NULL && v == NULL) ||
+         (value != NULL && v != NULL && !strcmp(value, v)));
+}
+
+static void test_lua(void) {
+  static struct mg_connection conn;
+  static struct mg_context ctx;
+
+  char http_request[] = "POST /foo/bar HTTP/1.1\r\n"
+      "Content-Length: 12\r\n"
+      "Connection: close\r\n\r\nhello world!";
+  const char *page = "<? print('hi') ?>";
+  lua_State *L = luaL_newstate();
+
+  conn.ctx = &ctx;
+  conn.buf = http_request;
+  conn.buf_size = conn.data_len = strlen(http_request);
+  conn.request_len = parse_http_request(conn.buf, conn.data_len,
+                                        &conn.request_info);
+  conn.content_len = conn.data_len - conn.request_len;
+
+  prepare_lua_environment(&conn, L);
+  ASSERT(lua_gettop(L) == 0);
+
+  check_lua_expr(L, "'hi'", "hi");
+  check_lua_expr(L, "request_info.request_method", "POST");
+  check_lua_expr(L, "request_info.uri", "/foo/bar");
+  check_lua_expr(L, "request_info.num_headers", "2");
+  check_lua_expr(L, "request_info.remote_ip", "0");
+  check_lua_expr(L, "request_info.http_headers['Content-Length']", "12");
+  check_lua_expr(L, "request_info.http_headers['Connection']", "close");
+  luaL_dostring(L, "post = read()");
+  check_lua_expr(L, "# post", "12");
+  check_lua_expr(L, "post", "hello world!");
+  lua_close(L);
+}
+#endif
+
+static void *user_data_tester(enum mg_event event, struct mg_connection *conn) {
+  struct mg_request_info *ri = mg_get_request_info(conn);
+  ASSERT(ri->user_data == (void *) 123);
+  ASSERT(event == MG_NEW_REQUEST);
+  return NULL;
+}
+
+static void test_user_data(void) {
+  static const char *options[] = {"listening_ports", UNUSED_PORT, NULL};
+  struct mg_context *ctx;
+
+  ASSERT((ctx = mg_start(user_data_tester, (void *) 123, options)) != NULL);
+  ASSERT(ctx->user_data == (void *) 123);
+  call_user(fc(ctx), MG_NEW_REQUEST);
+}
+
+static void test_mg_stat(void) {
+  static struct mg_context ctx;
+  struct file file;
+  memset(&file, 'A', sizeof(file));
+  ASSERT(!mg_stat(fc(&ctx), " does not exist ", &file));
+}
+
+static void test_skip_quoted(void) {
+  char x[] = "a=1, b=2  c='hi \' there'", *s = x, *p;
+
+  p = skip_quoted(&s, ", ", ", ", 0);
+  ASSERT(p != NULL && !strcmp(p, "a=1"));
+
+  p = skip_quoted(&s, ", ", ", ", 0);
+  ASSERT(p != NULL && !strcmp(p, "b=2"));
+
+  // TODO(lsm): fix this
+#if 0
+  p = skip_quoted(&s, "'", ", ", '\\');
+  p = skip_quoted(&s, "'", ", ", '\\');
+  printf("[%s]\n", p);
+  ASSERT(p != NULL && !strcmp(p, "hi ' there"));
+#endif
+}
+
 int main(void) {
   test_base64_encode();
   test_match_prefix();
@@ -265,5 +390,11 @@ int main(void) {
   test_mg_get_var();
   test_set_throttle();
   test_next_option();
+  test_user_data();
+  test_mg_stat();
+#ifdef USE_LUA
+  test_lua();
+#endif
+  test_skip_quoted();
   return 0;
 }
