@@ -19,7 +19,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  *
- * $Id: main.c 77 2008-12-13 09:47:02Z valenok $
+ * $Id: main.c 95 2008-12-16 19:41:26Z valenok $
  */
 
 #include <stdio.h>
@@ -192,7 +192,7 @@ process_command_line_arguments(struct mg_context *ctx, char *argv[])
 		/* No config file specified. Look for one where binary lives */
 		if ((p = strrchr(argv[0], DIRSEP)) != 0) {
 			snprintf(path, sizeof(path), "%.*s%s",
-			    p - argv[0] + 1, argv[0], config_file);
+			    (int) (p - argv[0]) + 1, argv[0], config_file);
 			config_file = path;
 		}
 	}
@@ -332,7 +332,6 @@ main(int argc, char *argv[])
 		show_usage_and_exit(argv[0]);
 
 #if defined(_WIN32)
-	{FILE  *fp = fopen("d:\\mongoose\\a.txt", "a+"); fprintf(fp, "hello"); fclose(fp); }
 	(void) sprintf(service_name, "Mongoose %s", mg_version());
 	try_to_run_as_nt_service();
 #endif /* _WIN32 */

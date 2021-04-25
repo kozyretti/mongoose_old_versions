@@ -19,7 +19,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  *
- * $Id: mongoose.c 87 2008-12-14 18:54:44Z valenok $
+ * $Id: mongoose.c 120 2008-12-18 11:40:34Z valenok $
  */
 
 #ifndef _WIN32_WCE /* Some ANSI #includes are not available on Windows CE */
@@ -76,6 +76,7 @@
 #define	popen(x, y)		_popen(x, y)
 #define	pclose(x)		_pclose(x)
 #define	access(x, y)		_access(x, y)
+#define	getcwd(x, y)		_getcwd(x, y)
 #define	strtoull(x, y, z)	_strtoui64(x, y, z)
 #define	write(x, y, z)		_write(x, y, (unsigned) z)
 #define	read(x, y, z)		_read(x, y, (unsigned) z)
@@ -138,7 +139,7 @@ typedef int SOCKET;
 
 #include "mongoose.h"
 
-#define	MONGOOSE_VERSION	"2.0"
+#define	MONGOOSE_VERSION	"2.1"
 #define	PASSWORDS_FILE_NAME	".htpasswd"
 #define	CGI_ENVIRONMENT_SIZE	4096
 #define	MAX_CGI_ENVIR_VARS	64
@@ -146,7 +147,7 @@ typedef int SOCKET;
 #define	MAX_LISTENING_SOCKETS	10
 #define	MAX_CALLBACKS		20
 #define	ARRAY_SIZE(array)	(sizeof(array) / sizeof(array[0]))
-#define	UNKNOWN_CONTENT_LENGTH	~0ULL
+#define	UNKNOWN_CONTENT_LENGTH	((uint64_t) ~0ULL)
 
 /*
  * Darwin prior to 7.0 and Win32 do not have socklen_t
@@ -209,7 +210,7 @@ struct ssl_func {
 #define SSL_CTX_set_default_passwd_cb(x,y) \
 	(* (void (*)(SSL_CTX *, mg_spcb_t))FUNC(13))((x),(y))
 
-struct ssl_func	ssl_sw[] = {
+static struct ssl_func	ssl_sw[] = {
 	{"SSL_free",			NULL},
 	{"SSL_accept",			NULL},
 	{"SSL_connect",			NULL},
@@ -287,7 +288,7 @@ struct mg_context {
 struct mg_connection {
 	struct mg_request_info	request_info;
 	struct mg_context *ctx;		/* Mongoose context we belong to*/
-	void		*ssl;		/* SSL descriptor		*/
+	SSL		*ssl;		/* SSL descriptor		*/
 	SOCKET		sock;		/* Connected socket		*/
 	struct usa	rsa;		/* Remote socket address	*/
 	struct usa	lsa;		/* Local socket address		*/
@@ -371,7 +372,7 @@ mg_strndup(const char *ptr, size_t len)
 {
 	char	*p;
 
-	if ((p = malloc(len + 1)) != NULL)
+	if ((p = (char *) malloc(len + 1)) != NULL)
 		mg_strlcpy(p, ptr, len + 1);
 
 	return (p);
@@ -637,7 +638,7 @@ to_unicode(const char *path, wchar_t *wbuf, size_t wbuf_len)
 		buf[0] = '\0';
 	}
 
-	MultiByteToWideChar(CP_UTF8, 0, buf, -1, wbuf, wbuf_len);
+	MultiByteToWideChar(CP_UTF8, 0, buf, -1, wbuf, (int) wbuf_len);
 }
 
 static int
@@ -645,7 +646,7 @@ mg_open(const char *path, int flags, int mode)
 {
 	wchar_t	wbuf[FILENAME_MAX];
 
-	to_unicode(path, wbuf, sizeof(wbuf));
+	to_unicode(path, wbuf, ARRAY_SIZE(wbuf));
 
 	return (_wopen(wbuf, flags, mode));
 }
@@ -655,7 +656,7 @@ mg_stat(const char *path, struct stat *stp)
 {
 	wchar_t	wbuf[FILENAME_MAX];
 
-	to_unicode(path, wbuf, sizeof(wbuf));
+	to_unicode(path, wbuf, ARRAY_SIZE(wbuf));
 
 	return (_wstat(wbuf, (struct _stat *) stp));
 }
@@ -665,7 +666,7 @@ mg_remove(const char *path)
 {
 	wchar_t	wbuf[FILENAME_MAX];
 
-	to_unicode(path, wbuf, sizeof(wbuf));
+	to_unicode(path, wbuf, ARRAY_SIZE(wbuf));
 
 	return (_wremove(wbuf));
 }
@@ -679,11 +680,11 @@ opendir(const char *name)
 
 	if (name == NULL || name[0] == '\0') {
 		errno = EINVAL;
-	} else if ((dir = malloc(sizeof(*dir))) == NULL) {
+	} else if ((dir = (DIR *) malloc(sizeof(*dir))) == NULL) {
 		errno = ENOMEM;
 	} else {
 		mg_snprintf(path, sizeof(path), "%s/*", name);
-		to_unicode(path, wpath, sizeof(wpath));
+		to_unicode(path, wpath, ARRAY_SIZE(wpath));
 		dir->handle = FindFirstFileW(wpath, &dir->info);
 
 		if (dir->handle != INVALID_HANDLE_VALUE) {
@@ -749,7 +750,6 @@ spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 		char *envp[], int fd_stdin, int fd_stdout, const char *dir)
 {
 	HANDLE	me;
-	DWORD	flags;
 	char	*p, *interp, cmdline[FILENAME_MAX], line[FILENAME_MAX];
 	FILE	*fp;
 	bool_t	retval;
@@ -757,7 +757,6 @@ spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 	PROCESS_INFORMATION	pi;
 
 	envp = NULL; /* Unused */
-	flags = DUPLICATE_CLOSE_SOURCE | DUPLICATE_SAME_ACCESS;
 
 	(void) memset(&si, 0, sizeof(si));
 	(void) memset(&pi, 0, sizeof(pi));
@@ -769,9 +768,9 @@ spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 
 	me = GetCurrentProcess();
 	DuplicateHandle(me, (HANDLE) _get_osfhandle(fd_stdin), me,
-	    &si.hStdInput, 0, TRUE, flags);
+	    &si.hStdInput, 0, TRUE, DUPLICATE_SAME_ACCESS);
 	DuplicateHandle(me, (HANDLE) _get_osfhandle(fd_stdout), me,
-	    &si.hStdOutput, 0, TRUE, flags);
+	    &si.hStdOutput, 0, TRUE, DUPLICATE_SAME_ACCESS);
 
 	/* If CGI file is a script, try to read the interpreter line */
 	interp = conn->ctx->options[OPT_CGI_INTERPRETER];
@@ -945,7 +944,7 @@ mg_unlock(struct mg_context *ctx)
  * descriptor. Return number of bytes written.
  */
 static uint64_t
-push(int fd, SOCKET sock, void *ssl, const char *buf, uint64_t len)
+push(int fd, SOCKET sock, SSL *ssl, const char *buf, uint64_t len)
 {
 	uint64_t	sent;
 	int		n, k;
@@ -980,7 +979,7 @@ push(int fd, SOCKET sock, void *ssl, const char *buf, uint64_t len)
  * Return number of bytes read.
  */
 static int
-pull(int fd, SOCKET sock, void *ssl, char *buf, int len)
+pull(int fd, SOCKET sock, SSL *ssl, char *buf, int len)
 {
 	int	nread;
 
@@ -1002,7 +1001,8 @@ int
 mg_write(struct mg_connection *conn, const void *buf, int len)
 {
 	assert(len >= 0);
-	return ((int) push(-1, conn->sock, conn->ssl, buf, (uint64_t) len));
+	return ((int) push(-1, conn->sock, conn->ssl,
+				(const char *) buf, (uint64_t) len));
 }
 
 int
@@ -1087,7 +1087,8 @@ get_var(const char *name, const char *buf, size_t buf_len)
 			p += var_len + 1;
 
 			/* Point s to the end of the value */
-			if ((s = memchr(p, '&', e - p)) == NULL)
+			s = (const char *) memchr(p, '&', e - p);
+			if (s == NULL)
 				s = e;
 
 			/* URL-decode value. Return result length */
@@ -1141,7 +1142,8 @@ make_path(struct mg_context *ctx, const char *uri, char *buf, size_t buf_len)
        	s = ctx->options[OPT_ALIASES];
 	FOR_EACH_WORD_IN_LIST(s, len) {
 
-		if ((p = memchr(s, '=', len)) == NULL || p >= s + len || p == s)
+		p = (char *) memchr(s, '=', len);
+		if (p == NULL || p >= s + len || p == s)
 			continue;
 
 		if (memcmp(uri, s, p - s) == 0) {
@@ -1798,7 +1800,8 @@ check_authorization(struct mg_connection *conn, const char *path)
 	s = conn->ctx->options[OPT_PROTECT];
 	FOR_EACH_WORD_IN_LIST(s, len) {
 
-		if ((p = memchr(s, '=', len)) == NULL || p >= s + len || p == s)
+		p = (const char *) memchr(s, '=', len);
+		if (p == NULL || p >= s + len || p == s)
 			continue;
 
 		if (!memcmp(conn->request_info.uri, s, p - s)) {
@@ -2029,8 +2032,11 @@ parse_http_headers(char **buf, struct mg_request_info *ri)
 static bool_t
 is_known_http_method(const char *method)
 {
-	return (!strcmp(method, "GET") || !strcmp(method, "POST") ||
-	    !strcmp(method, "PUT") || !strcmp(method, "DELETE"));
+	return (!strcmp(method, "GET") ||
+	    !strcmp(method, "POST") ||
+	    !strcmp(method, "HEAD") ||
+	    !strcmp(method, "PUT") ||
+	    !strcmp(method, "DELETE"));
 }
 
 static bool_t
@@ -2059,7 +2065,7 @@ parse_http_request(char *buf, struct mg_request_info *ri, const struct usa *usa)
 }
 
 static int
-read_request(int fd, SOCKET sock, void *ssl, char *buf, int bufsiz, int *nread)
+read_request(int fd, SOCKET sock, SSL *ssl, char *buf, int bufsiz, int *nread)
 {
 	int	n, request_len;
 
@@ -2157,7 +2163,7 @@ append_chunk(struct mg_request_info *ri, int fd, const char *buf, int len)
 
 	if (fd == -1) {
 		/* TODO: check for NULL here */
-		ri->post_data = realloc(ri->post_data,
+		ri->post_data = (char *) realloc(ri->post_data,
 		    ri->post_data_len + len);
 		(void) memcpy(ri->post_data + ri->post_data_len, buf, len);
 		ri->post_data_len += len;
@@ -2204,7 +2210,7 @@ handle_request_body(struct mg_connection *conn, int fd)
 				conn->free_post_data = TRUE;
 				tmp = ri->post_data;
 				/* +1 in case if already_read == 0 */
-				ri->post_data = malloc(already_read + 1);
+				ri->post_data = (char*)malloc(already_read + 1);
 				(void) memcpy(ri->post_data, tmp, already_read);
 			} else {
 				(void) push(fd, INVALID_SOCKET, NULL,
@@ -3089,7 +3095,7 @@ set_admin_uri_option(struct mg_context *ctx, const char *uri)
 }
 
 static const struct mg_option known_options[] = {
-	{"root", "\tWeb root directory", "."},
+	{"root", "\tWeb root directory", NULL},
 	{"index_files",	"Index files", "index.html,index.htm,index.cgi"},
 #if !defined(NO_SSL)
 	{"ssl_cert", "SSL certificate file", NULL},
@@ -3350,7 +3356,7 @@ accept_new_connection(const struct listener *l, struct mg_context *ctx)
 {
 	struct mg_connection *conn;
 
-	if ((conn = calloc(1, sizeof(*conn))) == NULL) {
+	if ((conn = (struct mg_connection*) calloc(1, sizeof(*conn))) == NULL) {
 		cry("Cannot allocate new connection info");
 	} else if ((conn->rsa.len = sizeof(conn->rsa.u.sin)) <= 0) {
 		/* Never ever happens. */
@@ -3433,7 +3439,7 @@ mg_start(void)
 	struct mg_context	*ctx;
 	int			i;
 
-	if ((ctx = calloc(1, sizeof(*ctx))) == NULL) {
+	if ((ctx = (struct mg_context *) calloc(1, sizeof(*ctx))) == NULL) {
 		cry("cannot allocate mongoose context");
 		return (NULL);
 	}
@@ -3453,6 +3459,9 @@ mg_start(void)
 				mg_fini(ctx);
 				return (NULL);
 			}
+
+	/* Initial document root is set to current working directory */
+	ctx->options[OPT_ROOT] = getcwd(NULL, 0);
 
 #if 0
 	tm->tm_gmtoff - 3600 * (tm->tm_isdst > 0 ? 1 : 0);

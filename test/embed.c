@@ -19,7 +19,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  *
- * $Id: embed.c 70 2008-12-12 10:18:27Z valenok $
+ * $Id: embed.c 105 2008-12-17 22:34:06Z valenok $
  * Unit test for the mongoose web server. Tests embedded API.
  */
 
@@ -29,7 +29,7 @@
 #include "mongoose.h"
 
 #if !defined(LISTENING_PORT)
-#define LISTENING_PORT	23456
+#define LISTENING_PORT	"23456"
 #endif /* !LISTENING_PORT */
 
 static struct mg_context *ctx;
