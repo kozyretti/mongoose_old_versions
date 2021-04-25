@@ -19,7 +19,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  *
- * $Id: main.c 95 2008-12-16 19:41:26Z valenok $
+ * $Id: main.c 153 2008-12-21 23:32:52Z valenok $
  */
 
 #include <stdio.h>
@@ -27,6 +27,7 @@
 #include <signal.h>
 #include <string.h>
 #include <errno.h>
+#include <limits.h>
 
 #include "mongoose.h"
 

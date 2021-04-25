@@ -10,7 +10,7 @@
  *
  * The above copyright notice and this permission notice shall be included in
  * all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -19,7 +19,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  *
- * $Id: embed.c 105 2008-12-17 22:34:06Z valenok $
+ * $Id: embed.c 152 2008-12-21 15:20:52Z valenok $
  * Unit test for the mongoose web server. Tests embedded API.
  */
 
@@ -115,6 +115,19 @@ test_user_data(struct mg_connection *conn, const struct mg_request_info *ri,
 	mg_printf(conn, "User data: [%d]", * (int *) user_data);
 }
 
+static void
+test_protect(struct mg_connection *conn, const struct mg_request_info *ri,
+		void *user_data)
+{
+	const char	*allowed_user = * (char **) user_data;
+	const char	*remote_user = ri->remote_user;
+	int		allowed;
+
+	allowed = remote_user != NULL && !strcmp(allowed_user, remote_user);
+
+	* (void **) user_data = allowed ? (void *) 1 : NULL;
+}
+
 int main(void)
 {
 	int	user_data = 1234;
@@ -130,6 +143,8 @@ int main(void)
 
 	mg_bind_to_error_code(ctx, 404, &test_error, NULL);
 	mg_bind_to_error_code(ctx, 0, &test_error, NULL);
+
+	mg_protect_uri(ctx, "/foo/secret", &test_protect, "joe");
 
 	for (;;)
 		(void) getchar();
