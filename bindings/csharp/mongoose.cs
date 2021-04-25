@@ -18,7 +18,7 @@
 //  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 //  THE SOFTWARE.
 //
-//  $Id: mongoose.cs 399 2009-05-28 09:03:03Z valenok $
+//  $Id: mongoose.cs 472 2009-08-30 22:40:29Z spsone1 $
 
 using System;
 using System.Runtime.InteropServices;
@@ -33,19 +33,20 @@ using System.Runtime.InteropServices;
 [StructLayout(LayoutKind.Sequential)] public struct MongooseRequestInfo {
 	public string	request_method;
 	public string	uri;
-	public string	post_data;
+	public string	http_version;
+	public string	query_string;
+	public IntPtr	post_data;
 	public string	remote_user;
-	public long	remote_ip;
+	public int	remote_ip; //int to match the 32bit declaration in c
 	public int	remote_port;
 	public int	post_data_len;
-	public int	http_version_major;
-	public int	http_version_minor;
 	public int	status_code;
 	public int	num_headers;
 	[MarshalAs(UnmanagedType.ByValArray,SizeConst=64)] public MongooseHeader[] http_headers;
 };
 
 // This is a delegate for mg_callback_t from mongoose.h header file
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 public delegate void MongooseCallback2(IntPtr conn, ref MongooseRequestInfo ri, IntPtr user_data);
 
 // This is a delegate to be used by the application
@@ -54,6 +55,9 @@ public delegate void MongooseCallback(MongooseConnection conn, MongooseRequestIn
 public class Mongoose {
 	public string version;
 	private IntPtr ctx;
+    	//These two events are here to store a ref to the callbacks while they are over in unmanaged code. 
+    	private event MongooseCallback2 delegates2;
+    	private event MongooseCallback delegates1;
 
 	[DllImport("_mongoose",CallingConvention=CallingConvention.Cdecl)] private static extern IntPtr	mg_start();
 	[DllImport("_mongoose",CallingConvention=CallingConvention.Cdecl)] private static extern void	mg_stop(IntPtr ctx);
@@ -88,10 +92,13 @@ public class Mongoose {
 			MongooseConnection connection = new MongooseConnection(conn, this);
 			func(connection, ri);
 		};
+        	// store a reference to the callback so it won't be GC'ed while its over in unmanged code
+        	delegates2 += callback;
 		mg_set_uri_callback(this.ctx, uri_regex, callback, IntPtr.Zero);
 	}
 	
 	public void set_log_callback(MongooseCallback func) {
+		delegates1 += func;
 		mg_set_log_callback(this.ctx, func);
 	}
 }
