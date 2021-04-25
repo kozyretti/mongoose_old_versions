@@ -90,19 +90,20 @@ static void show_usage_and_exit(void) {
   const char **names;
   int i;
 
-  fprintf(stderr, "Mongoose version %s (c) Sergey Lyubka\n", mg_version());
+  fprintf(stderr, "Mongoose version %s (c) Sergey Lyubka, built %s\n",
+          mg_version(), __DATE__);
   fprintf(stderr, "Usage:\n");
   fprintf(stderr, "  mongoose -A <htpasswd_file> <realm> <user> <passwd>\n");
   fprintf(stderr, "  mongoose <config_file>\n");
   fprintf(stderr, "  mongoose [-option value ...]\n");
-  fprintf(stderr, "OPTIONS:\n");
+  fprintf(stderr, "\nOPTIONS:\n");
 
   names = mg_get_valid_option_names();
   for (i = 0; names[i] != NULL; i += 3) {
     fprintf(stderr, "  -%s %s (default: \"%s\")\n",
             names[i], names[i + 1], names[i + 2] == NULL ? "" : names[i + 2]);
   }
-  fprintf(stderr, "See  http://code.google.com/p/mongoose/wiki/MongooseManual"
+  fprintf(stderr, "\nSee  http://code.google.com/p/mongoose/wiki/MongooseManual"
           " for more details.\n");
   fprintf(stderr, "Example:\n  mongoose -s cert.pem -p 80,443s -d no\n");
   exit(EXIT_FAILURE);
@@ -216,6 +217,14 @@ static void init_server_name(void) {
            mg_version());
 }
 
+static void *mongoose_callback(enum mg_event ev, struct mg_connection *conn) {
+  if (ev == MG_EVENT_LOG) {
+    printf("%s\n", mg_get_request_info(conn)->log_message);
+  }
+
+  return NULL;
+}
+
 static void start_mongoose(int argc, char *argv[]) {
   char *options[MAX_OPTIONS];
   int i;
@@ -242,15 +251,13 @@ static void start_mongoose(int argc, char *argv[]) {
   signal(SIGINT, signal_handler);
 
   /* Start Mongoose */
-  ctx = mg_start(NULL, NULL, (const char **) options);
+  ctx = mg_start(&mongoose_callback, NULL, (const char **) options);
   for (i = 0; options[i] != NULL; i++) {
     free(options[i]);
   }
 
   if (ctx == NULL) {
-    die("%s", "Failed to start Mongoose. Maybe some options are "
-        "assigned bad values?\nTry to run with '-e error_log.txt' "
-        "and check error_log.txt for more information.");
+    die("%s", "Failed to start Mongoose.");
   }
 }
 
@@ -435,6 +442,11 @@ static LRESULT CALLBACK WindowProc(HWND hWnd, UINT msg, WPARAM wParam,
           break;
       }
       break;
+    case WM_CLOSE:
+      mg_stop(ctx);
+      Shell_NotifyIcon(NIM_DELETE, &TrayIcon);
+      PostQuitMessage(0);
+      return 0;  // We've just sent our own quit message, with proper hwnd.
   }
 
   return DefWindowProc(hWnd, msg, wParam, lParam);
@@ -466,10 +478,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdline, int show) {
   TrayIcon.uCallbackMessage = WM_USER;
   Shell_NotifyIcon(NIM_ADD, &TrayIcon);
 
-  while (GetMessage(&msg, hWnd, 0, 0)) {
+  while (GetMessage(&msg, hWnd, 0, 0) > 0) {
     TranslateMessage(&msg);
     DispatchMessage(&msg);
   }
+
+  return msg.wParam;
 }
 #else
 int main(int argc, char *argv[]) {
