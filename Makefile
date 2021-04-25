@@ -1,32 +1,54 @@
-PROG=	mongoose
-SRCS=	main.c mongoose.c
-COPT=	-W -Wall -std=c99 -pedantic -Os -s
+# This file is part of Mongoose project, http://code.google.com/p/mongoose
+# $Id: Makefile 320 2009-04-14 21:46:29Z valenok $
 
-# Possible flags: (in brackets are rough numbers for 'gcc -O2' on i386)
+PROG=	mongoose
+
+all:
+	@echo "make (linux|bsd|solaris|mac|windows|mingw)"
+
+# Possible COPT values: (in brackets are rough numbers for 'gcc -O2' on i386)
 # -DHAVE_MD5		- use system md5 library (-2kb)
 # -DNDEBUG		- strip off all debug code (-5kb)
-# -D_DEBUG		- build debug version (very noisy) (+7kb)
+# -DDEBUG		- build debug version (very noisy) (+7kb)
 # -DNO_CGI		- disable CGI support (-5kb)
 # -DNO_SSL		- disable SSL functionality (-2kb)
 # -DNO_AUTH		- disable authorization support (-4kb)
-# -DCONFIG=\"file\"	- use `file' as the default config file
+# -DCONFIG_FILE=\"file\" - use `file' as the default config file
 # -DNO_SSI		- disable SSI support (-4kb)
+# -DHAVE_STRTOUI64	- use system strtoui64() function for strtoull()
 
-all:
-	@echo "make (linux|bsd|windows|mingw|rtems)"
+
+##########################################################################
+###                 UNIX build: linux, bsd, mac, rtems
+##########################################################################
+
+CFLAGS=		-W -Wall -std=c99 -pedantic -Os $(COPT)
+MAC_SHARED=	-flat_namespace -bundle -undefined suppress
+LINFLAGS=	$(CFLAGS) -D_POSIX_SOURCE -D_BSD_SOURCE -ldl -lpthread
+LIB=		_$(PROG).so
 
 linux:
-	$(CC) $(COPT) $(CFLAGS)  -D_POSIX_SOURCE -D_BSD_SOURCE \
-		$(SRCS) -ldl -lpthread -o $(PROG)
-
+	$(CC) $(LINFLAGS) mongoose.c -shared -fPIC -fpic -s -o $(LIB)
+	$(CC) $(LINFLAGS) mongoose.c main.c -s -o $(PROG)
 bsd:
-	$(CC) $(COPT) $(CFLAGS) $(SRCS) -lpthread -o $(PROG)
+	$(CC) $(CFLAGS) mongoose.c -shared -lpthread -s -fpic -fPIC -o $(LIB)
+	$(CC) $(CFLAGS) mongoose.c main.c -lpthread -s -o $(PROG)
 
-rtems:
-	$(CC) -c $(COPT) $(CFLAGS) mongoose.c compat_rtems.c
-	$(AR) -r lib$(PROG).a *.o && ranlib lib$(PROG).a
+mac:
+	$(CC) $(CFLAGS) $(MAC_SHARED) mongoose.c -lpthread -o $(LIB)
+	$(CC) $(CFLAGS) mongoose.c main.c -lpthread -o $(PROG)
 
-# To build on Windows, follow these steps:
+solaris:
+	gcc $(CFLAGS) mongoose.c -lpthread -lnsl \
+		-lsocket -s -fpic -fPIC -shared -o $(LIB)
+	gcc $(CFLAGS) mongoose.c main.c -lpthread -lnsl -lsocket -s -o $(PROG)
+
+
+##########################################################################
+###            WINDOWS build: Using Visual Studio or Mingw
+##########################################################################
+
+# Using Visual Studio Express
 # 1. Download and install Visual Studio Express 2008 to c:\msvc8
 # 2. Download and install Windows SDK to c:\sdk
 # 3. Go to c:\msvc8\vc\bin and start "VIsual Studio 2008 Command prompt"
@@ -37,45 +59,39 @@ rtems:
 WINDBG=	/DNDEBUG /Os /Oi /GL /Gy
 WINOPT=	/MT /TC $(WINDBG) /nologo /W4 \
 	/D_CRT_SECURE_NO_WARNINGS /DHAVE_STRTOUI64
-windows: winexe windll
-
-windll:
+windows:
 	cl $(WINOPT) mongoose.c /link /incremental:no /DLL \
-		/DEF:win32_installer\dll.def /out:$(PROG).dll ws2_32.lib
-
-winexe:
-	cl $(WINOPT) $(SRCS) /link /incremental:no \
+		/DEF:win32_installer\dll.def /out:_$(PROG).dll ws2_32.lib
+	cl $(WINOPT) mongoose.c main.c /link /incremental:no \
 		/out:$(PROG).exe ws2_32.lib advapi32.lib
 
 # Build for Windows under MinGW
 #MINGWDBG= -DDEBUG -O0
 MINGWDBG= -DNDEBUG -Os
 MINGWOPT= -W -Wall -mthreads -Wl,--subsystem,console $(MINGWDBG) -DHAVE_STDINT
-
-mingw: mingwexe mingwdll
-mingwdll:
+mingw:
 	gcc $(MINGWOPT) mongoose.c -lws2_32 \
-		-shared -Wl,--out-implib=$(PROG).lib -o $(PROG).dll
+		-shared -Wl,--out-implib=$(PROG).lib -o _$(PROG).dll
+	gcc $(MINGWOPT) mongoose.c main.c -lws2_32 -ladvapi32 -o $(PROG).exe
 
-mingwexe:
-	gcc $(MINGWOPT) $(SRCS) -lws2_32 -ladvapi32 -o $(PROG).exe
+
+##########################################################################
+###            Manuals, cleanup, test, release
+##########################################################################
 
 man:
 	cat mongoose.1 | tbl | groff -man -Tascii | col -b > mongoose.1.txt
 	cat mongoose.1 | tbl | groff -man -Tascii | less
 
-test: test-server
-test-server:
-	perl test/test.pl
+# "TEST=unit make test" - perform unit test only
+# "TEST=embedded" - test embedded API by building and testing test/embed.c
+# "TEST=basic_tests" - perform basic tests only (no CGI, SSI..)
+test: do_test
+do_test:
+	perl test/test.pl $(TEST)
 
 release: clean
 	F=mongoose-`perl -lne '/define\s+MONGOOSE_VERSION\s+"(\S+)"/ and print $$1' mongoose.c`.tgz ; cd .. && tar --exclude \*.svn --exclude \*.swp --exclude \*.nfs\* --exclude win32_installer -czf x mongoose && mv x mongoose/$$F
 
 clean:
 	rm -rf *.o *.core $(PROG) *.obj $(PROG).1.txt *.dSYM *.tgz
-
-p:
-	swig -python mongoose.swig
-	cc  -I python mongoose.c mongoose_wrap.c -bundle \
-		-o /tmp/_mongoose.so -flat_namespace -undefined suppress
-	PYTHONPATH=/tmp python test_swig.py

@@ -19,7 +19,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  *
- * $Id: main.c 260 2009-03-26 23:11:12Z valenok $
+ * $Id: main.c 313 2009-04-14 14:07:03Z valenok $
  */
 
 #include <stdio.h>
@@ -39,7 +39,7 @@
 #if !defined(__LCC__)
 #define	strdup(x)		_strdup(x)
 #endif /* !MINGW */
-#define	pause()			Sleep(INT_MAX)
+#define	sleep(x)		Sleep((x) * 1000)
 #else
 #include <sys/wait.h>
 #include <unistd.h>		/* For pause() */
@@ -361,7 +361,7 @@ main(int argc, char *argv[])
 			mg_get_option(ctx, "root"));
 	fflush(stdout);
 	while (exit_flag == 0)
-		pause();
+		sleep(1);
 
 	(void) printf("Exiting on signal %d, "
 	    "waiting for all threads to finish...", exit_flag);
