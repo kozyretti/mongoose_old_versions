@@ -19,8 +19,12 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  *
- * $Id: main.c 313 2009-04-14 14:07:03Z valenok $
+ * $Id: main.c 429 2009-06-22 12:24:44Z valenok $
  */
+ 
+#if defined(_WIN32)
+#define _CRT_SECURE_NO_WARNINGS	/* Disable deprecation warning in VS2005 */
+#endif /* _WIN32 */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -47,7 +51,6 @@
 #endif /* _WIN32 */
 
 static int exit_flag;	                /* Program termination flag	*/
-static struct mg_context *ctx;		/* Mongoose context		*/
 
 #if !defined(CONFIG_FILE)
 #define	CONFIG_FILE		"mongoose.conf"
@@ -71,29 +74,12 @@ signal_handler(int sig_num)
  * Show usage string and exit.
  */
 static void
-show_usage_and_exit(const char *prog)
+show_usage_and_exit(void)
 {
-	const struct mg_option	*o;
-
-	(void) fprintf(stderr,
-	    "Mongoose version %s (c) Sergey Lyubka\n"
-	    "usage: %s [options] [config_file]\n", mg_version(), prog);
-
-#if !defined(NO_AUTH)
-	fprintf(stderr, "  -A <htpasswd_file> <realm> <user> <passwd>\n");
-#endif /* NO_AUTH */
-
-	o = mg_get_option_list();
-	for (; o->name != NULL; o++) {
-		(void) fprintf(stderr, "  -%s\t%s", o->name, o->description);
-		if (o->default_value != NULL)
-			fprintf(stderr, " (default: \"%s\")", o->default_value);
-		fputc('\n', stderr);
-	}
+	mg_show_usage_string(stderr);
 	exit(EXIT_FAILURE);
 }
 
-#if !defined(NO_AUTH)
 /*
  * Edit the passwords file.
  */
@@ -101,100 +87,41 @@ static int
 mg_edit_passwords(const char *fname, const char *domain,
 		const char *user, const char *pass)
 {
-	int	ret = EXIT_SUCCESS, found = 0;
-	char	line[512], u[512], d[512], ha1[33], tmp[FILENAME_MAX];
-	FILE	*fp = NULL, *fp2 = NULL;
+	struct mg_context	*ctx;
+	int			retval;
 
-	(void) snprintf(tmp, sizeof(tmp), "%s.tmp", fname);
+	ctx = mg_start();
+	(void) mg_set_option(ctx, "auth_realm", domain);
+	retval = mg_modify_passwords_file(ctx, fname, user, pass);
+	mg_stop(ctx);
 
-	/* Create the file if does not exist */
-	if ((fp = fopen(fname, "a+")) != NULL)
-		(void) fclose(fp);
-
-	/* Open the given file and temporary file */
-	if ((fp = fopen(fname, "r")) == NULL) {
-		fprintf(stderr, "Cannot open %s: %s", fname, strerror(errno));
-                exit(EXIT_FAILURE);
-        } else if ((fp2 = fopen(tmp, "w+")) == NULL) {
-		fprintf(stderr, "Cannot open %s: %s", tmp, strerror(errno));
-                exit(EXIT_FAILURE);
-        }
-
-	/* Copy the stuff to temporary file */
-	while (fgets(line, sizeof(line), fp) != NULL) {
-
-		if (sscanf(line, "%[^:]:%[^:]:%*s", u, d) != 2)
-			continue;
-
-		if (!strcmp(u, user) && !strcmp(d, domain)) {
-			found++;
-			mg_md5(ha1, user, ":", domain, ":", pass, NULL);
-			(void) fprintf(fp2, "%s:%s:%s\n", user, domain, ha1);
-		} else {
-			(void) fprintf(fp2, "%s", line);
-		}
-	}
-
-	/* If new user, just add it */
-	if (!found) {
-		mg_md5(ha1, user, ":", domain, ":", pass, NULL);
-		(void) fprintf(fp2, "%s:%s:%s\n", user, domain, ha1);
-	}
-
-	/* Close files */
-	(void) fclose(fp);
-	(void) fclose(fp2);
-
-	/* Put the temp file in place of real file */
-	(void) remove(fname);
-	(void) rename(tmp, fname);
-
-	return (ret);
-}
-#endif /* NO_AUTH */
-
-static void
-set_temporary_opt_value(const struct mg_option *opts, char **vals,
-		const char *name, const char *val)
-{
-	int	i;
-
-	for (i = 0; opts[i].name != NULL; i++)
-		if (!strcmp(opts[i].name, name)) {
-			if (vals[i] != NULL)
-				free(vals[i]);
-			vals[i] = strdup(val);
-			return;
-		}
-	(void) fprintf(stderr, "No such option: \"%s\"\n", name);
-	exit(EXIT_FAILURE);
+	return (retval);
 }
 
 static void
 process_command_line_arguments(struct mg_context *ctx, char *argv[])
 {
-	const struct mg_option *opts;
 	const char	*config_file = CONFIG_FILE;
-	char		line[BUFSIZ], opt[BUFSIZ], *vals[100],
-				val[BUFSIZ], path[FILENAME_MAX], *p;
+	char		line[512], opt[512], *vals[100],
+				val[512], path[FILENAME_MAX], *p;
 	FILE		*fp;
 	size_t		i, line_no = 0;
 
 	/* First find out, which config file to open */
 	for (i = 1; argv[i] != NULL && argv[i][0] == '-'; i += 2)
 		if (argv[i + 1] == NULL)
-			show_usage_and_exit(argv[0]);
+			show_usage_and_exit();
 
 	if (argv[i] != NULL && argv[i + 1] != NULL) {
-		/* More than one non-option arguments are given w*/
-		show_usage_and_exit(argv[0]);
+		/* More than one non-option arguments are given */
+		show_usage_and_exit();
 	} else if (argv[i] != NULL) {
 		/* Just one non-option argument is given, this is config file */
 		config_file = argv[i];
 	} else {
 		/* No config file specified. Look for one where binary lives */
 		if ((p = strrchr(argv[0], DIRSEP)) != 0) {
-			snprintf(path, sizeof(path), "%.*s%s",
+			(void) snprintf(path, sizeof(path), "%.*s%s",
 			    (int) (p - argv[0]) + 1, argv[0], config_file);
 			config_file = path;
 		}
@@ -211,7 +138,6 @@ process_command_line_arguments(struct mg_context *ctx, char *argv[])
 
 	/* Reset temporary value holders */
 	(void) memset(vals, 0, sizeof(vals));
-	opts = mg_get_option_list();
 
 	if (fp != NULL) {
 		(void) printf("Loading config file %s\n", config_file);
@@ -225,13 +151,13 @@ process_command_line_arguments(struct mg_context *ctx, char *argv[])
 			if (line[0] == '#' || line[0] == '\n')
 				continue;
 
-			if (sscanf(line, "%s %[^\n#]", opt, val) != 2) {
+			if (sscanf(line, "%s %[^\r\n#]", opt, val) != 2) {
 				fprintf(stderr, "%s: line %d is invalid\n",
 				    config_file, (int) line_no);
 				exit(EXIT_FAILURE);
 			}
-
-			set_temporary_opt_value(opts, vals, opt, val);
+			if (mg_set_option(ctx, opt, val) != 1)
+				exit(EXIT_FAILURE);
 		}
 
 		(void) fclose(fp);
@@ -239,109 +165,27 @@ process_command_line_arguments(struct mg_context *ctx, char *argv[])
 
 	/* Now pass through the command line options */
 	for (i = 1; argv[i] != NULL && argv[i][0] == '-'; i += 2)
-		set_temporary_opt_value(opts, vals, &argv[i][1], argv[i + 1]);
-
-	/* Finally, call option setters */
-	for (i = 0; opts[i].name != NULL; i++) {
-		if (vals[i] != NULL) {
-			if (mg_set_option(ctx, opts[i].name, vals[i]) != 1) {
-				(void) fprintf(stderr, "Error setting "
-				    "option \"%s\"\n", opts[i].name);
-				exit(EXIT_FAILURE);
-			}
-			free(vals[i]);
-		}
-	}
+		if (mg_set_option(ctx, &argv[i][1], argv[i + 1]) != 1)
+			exit(EXIT_FAILURE);
 }
-
-#ifdef _WIN32
-static SERVICE_STATUS		ss;
-static SERVICE_STATUS_HANDLE	hStatus;
-static char			service_name[20];
-
-static void WINAPI
-ControlHandler(DWORD code)
-{
-	if (code == SERVICE_CONTROL_STOP || code == SERVICE_CONTROL_SHUTDOWN) {
-		ss.dwWin32ExitCode = 0;
-		ss.dwCurrentState = SERVICE_STOPPED;
-	}
-
-	SetServiceStatus(hStatus, &ss);
-}
-
-static void WINAPI
-ServiceMain(void)
-{
-	char path[MAX_PATH], *p, *av[] = {"mongoose_service", NULL, NULL};
-	struct mg_context *ctx;
-
-	av[1] = path;
-
-	ss.dwServiceType      = SERVICE_WIN32;
-	ss.dwCurrentState     = SERVICE_RUNNING;
-	ss.dwControlsAccepted = SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN;
-
-	hStatus = RegisterServiceCtrlHandler(service_name, ControlHandler);
-	SetServiceStatus(hStatus, &ss);
-
-	GetModuleFileName(NULL, path, sizeof(path));
-
-	if ((p = strrchr(path, DIRSEP)) != NULL)
-		*++p = '\0';
-
-	strcat(path, CONFIG_FILE);	/* woo ! */
-
-	Sleep(3000);
-	if ((ctx = mg_start()) != NULL) {
-		process_command_line_arguments(ctx, av);
-
-		while (ss.dwCurrentState == SERVICE_RUNNING)
-			Sleep(1000);
-		mg_stop(ctx);
-	}
-
-	ss.dwCurrentState  = SERVICE_STOPPED;
-	ss.dwWin32ExitCode = (DWORD) -1;
-	SetServiceStatus(hStatus, &ss);
-}
-
-static void
-try_to_run_as_nt_service(void)
-{
-	static SERVICE_TABLE_ENTRY service_table[] = {
-		{service_name, (LPSERVICE_MAIN_FUNCTION) ServiceMain},
-		{NULL, NULL}
-	};
-
-	if (StartServiceCtrlDispatcher(service_table))
-		exit(EXIT_SUCCESS);
-}
-#endif /* _WIN32 */
 
 int
 main(int argc, char *argv[])
 {
-#if !defined(NO_AUTH)
+	struct mg_context	*ctx;
+
 	if (argc > 1 && argv[1][0] == '-' && argv[1][1] == 'A') {
 		if (argc != 6)
-			show_usage_and_exit(argv[0]);
+			show_usage_and_exit();
 		exit(mg_edit_passwords(argv[2], argv[3], argv[4],argv[5]));
 	}
-#endif /* NO_AUTH */
 
 	if (argc == 2 && (!strcmp(argv[1], "-h") || !strcmp(argv[1], "--help")))
-		show_usage_and_exit(argv[0]);
-
-#if defined(_WIN32)
-	(void) sprintf(service_name, "Mongoose %s", mg_version());
-	try_to_run_as_nt_service();
-#endif /* _WIN32 */
+		show_usage_and_exit();
 
 #ifndef _WIN32
 	(void) signal(SIGCHLD, signal_handler);
 #endif /* _WIN32 */
-
 	(void) signal(SIGTERM, signal_handler);
 	(void) signal(SIGINT, signal_handler);
 
@@ -356,9 +200,10 @@ main(int argc, char *argv[])
 		exit(EXIT_FAILURE);
 
 	printf("Mongoose %s started on port(s) [%s], serving directory [%s]\n",
-			mg_version(),
-			mg_get_option(ctx, "ports"),
-			mg_get_option(ctx, "root"));
+	    mg_version(),
+	    mg_get_option(ctx, "ports"),
+	    mg_get_option(ctx, "root"));
+
 	fflush(stdout);
 	while (exit_flag == 0)
 		sleep(1);

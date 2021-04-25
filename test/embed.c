@@ -19,7 +19,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  *
- * $Id: embed.c 306 2009-04-08 10:02:22Z valenok $
+ * $Id: embed.c 402 2009-05-28 10:00:30Z valenok $
  * Unit test for the mongoose web server. Tests embedded API.
  */
 
@@ -33,7 +33,6 @@
 #define LISTENING_PORT	"23456"
 #endif /* !LISTENING_PORT */
 
-static struct mg_context *ctx;
 static const char *standard_reply =	"HTTP/1.1 200 OK\r\n"
 					"Content-Type: text/plain\r\n"
 					"Connection: close\r\n\r\n";
@@ -113,7 +112,8 @@ test_error(struct mg_connection *conn, const struct mg_request_info *ri,
 {
 	const char *value;
 
-	mg_printf(conn, "%s", standard_reply);
+	mg_printf(conn, "HTTP/1.1 %d XX\r\n"
+		"Conntection: close\r\n\r\n", ri->status_code);
 	mg_printf(conn, "Error: [%d]", ri->status_code);
 }
 
@@ -156,25 +156,43 @@ test_put(struct mg_connection *conn, const struct mg_request_info *ri,
 	mg_write(conn, ri->post_data, ri->post_data_len);
 }
 
+static void
+test_remove_callback(struct mg_connection *conn,
+		const struct mg_request_info *ri, void *user_data)
+{
+	struct mg_context	*ctx = (struct mg_context *) user_data;
+	const char		*uri_regex = "/foo/*";
+
+	mg_printf(conn, "%sRemoving callbacks bound to [%s]",
+			standard_reply, uri_regex);
+
+	/* Un-bind bound callback */
+	mg_set_uri_callback(ctx, uri_regex, NULL, NULL);
+}
+
 int main(void)
 {
-	int	user_data = 1234;
+	int			user_data = 1234;
+	struct mg_context	*ctx;
 
 	ctx = mg_start();
 	mg_set_option(ctx, "ports", LISTENING_PORT);
 
-	mg_bind_to_uri(ctx, "/test_get_header", &test_get_header, NULL);
-	mg_bind_to_uri(ctx, "/test_get_var", &test_get_var, NULL);
-	mg_bind_to_uri(ctx, "/test_get_request_info", &test_get_ri, NULL);
-	mg_bind_to_uri(ctx, "/foo/*", &test_get_ri, NULL);
-	mg_bind_to_uri(ctx, "/test_user_data", &test_user_data, &user_data);
-	mg_bind_to_uri(ctx, "/p", &test_post, NULL);
-	mg_bind_to_uri(ctx, "/put", &test_put, NULL);
+	mg_set_uri_callback(ctx, "/test_get_header", &test_get_header, NULL);
+	mg_set_uri_callback(ctx, "/test_get_var", &test_get_var, NULL);
+	mg_set_uri_callback(ctx, "/test_get_request_info", &test_get_ri, NULL);
+	mg_set_uri_callback(ctx, "/foo/*", &test_get_ri, NULL);
+	mg_set_uri_callback(ctx, "/test_user_data",
+			&test_user_data, &user_data);
+	mg_set_uri_callback(ctx, "/p", &test_post, NULL);
+	mg_set_uri_callback(ctx, "/put", &test_put, NULL);
+	mg_set_uri_callback(ctx, "/test_remove_callback",
+			&test_remove_callback, ctx);
 
-	mg_bind_to_error_code(ctx, 404, &test_error, NULL);
-	mg_bind_to_error_code(ctx, 0, &test_error, NULL);
+	mg_set_error_callback(ctx, 404, &test_error, NULL);
+	mg_set_error_callback(ctx, 0, &test_error, NULL);
 
-	mg_protect_uri(ctx, "/foo/secret", &test_protect, (void *) "joe");
+	mg_set_auth_callback(ctx, "/foo/secret", &test_protect, (void *) "joe");
 
 	for (;;)
 		(void) getchar();

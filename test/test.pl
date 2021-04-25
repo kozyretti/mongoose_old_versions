@@ -1,6 +1,6 @@
 #!/usr/bin/env perl
 # This script is used to test Mongoose web server
-# $Id$
+# $Id: test.pl 430 2009-06-29 07:40:15Z valenok $
 
 use IO::Socket;
 use File::Path;
@@ -43,7 +43,9 @@ sub fail {
 }
 
 sub get_num_of_log_entries {
-	open FD, "access.log"; my @logs = (<FD>); close FD;
+	open FD, "access.log" or return 0;
+	my @logs = (<FD>);
+	close FD;
 	return scalar @logs;
 }
 
@@ -162,6 +164,7 @@ do_unit_test();
 # Spawn the server on port $port
 my $cmd = "$exe -ports $port -access_log access.log -error_log debug.log ".
 		"-cgi_env CGI_FOO=foo,CGI_BAR=bar,CGI_BAZ=baz " .
+		"-mime_types .bar=foo/bar,.tar.gz=blah,.baz=foo " .
 		"-root test -aliases $alias -admin_uri /hh";
 $cmd .= ' -cgi_interp perl' if on_windows();
 spawn($cmd);
@@ -188,6 +191,12 @@ o("GET / HTTP/1.1z\r\n\r\n", '400 Bad Request', 'Bad HTTP min Version', 0);
 o("GET / HTTP/02.0\r\n\r\n", '505 HTTP version not supported',
 	'HTTP Version >1.1');
 
+# File with leading single dot
+o("GET /.leading.dot.txt HTTP/1.0\n\n", 'abc123', 'Leading dot 1');
+o("GET /...leading.dot.txt HTTP/1.0\n\n", 'abc123', 'Leading dot 2');
+o("GET /../\\\\/.//...leading.dot.txt HTTP/1.0\n\n", 'abc123', 'Leading dot 3');
+o("GET .. HTTP/1.0\n\n", '400 Bad Request', 'Leading dot 4', 0);
+
 mkdir $test_dir unless -d $test_dir;
 o("GET /$test_dir_uri/not_exist HTTP/1.0\n\n",
 	'HTTP/1.1 404', 'PATH_INFO loop problem');
@@ -198,9 +207,6 @@ o("GET /$test_dir_uri/ HTTP/1.0\n\n", 'tralala', 'Index substitution');
 o("GET / HTTP/1.0\n\n", 'embed.c', 'Directory listing - file name');
 o("GET /ta/ HTTP/1.0\n\n", 'Modified', 'Aliases');
 o("GET /not-exist HTTP/1.0\r\n\n", 'HTTP/1.1 404', 'Not existent file');
-o("GET /hello.txt HTTP/1.1\n\nGET /hello.txt HTTP/1.0\n\n",
-	'HTTP/1.1 200.+keep-alive.+HTTP/1.1 200.+close',
-	'Request pipelining', 2);
 mkdir $test_dir . $dir_separator . 'x';
 my $path = $test_dir . $dir_separator . 'x' . $dir_separator . 'index.cgi';
 write_file($path, read_file($root . $dir_separator . 'env.cgi'));
@@ -217,6 +223,9 @@ my $mime_types = {
 	css => 'text/css',
 	jpg => 'image/jpeg',
 	c => 'text/plain',
+	'tar.gz' => 'blah',
+	bar => 'foo/bar',
+	baz => 'foo',
 };
 
 foreach my $key (keys %$mime_types) {
@@ -240,7 +249,7 @@ my $range_request = "GET /hello.txt HTTP/1.1\nConnection: close\n".
 		"Range: bytes=3-5\r\n\r\n";
 o($range_request, '206 Partial Content', 'Range: 206 status code');
 o($range_request, 'Content-Length: 3\s', 'Range: Content-Length');
-o($range_request, 'Content-Range: bytes 3-5', 'Range: Content-Range');
+o($range_request, 'Content-Range: bytes 3-5/17', 'Range: Content-Range');
 o($range_request, '\nple$', 'Range: body content');
 
 # Test directory sorting. Sleep between file creation for 1.1 seconds,
@@ -434,12 +443,18 @@ sub do_embedded_test {
 	o("bad request\n\n", 'Error: \[400\]', '* error handler', 0);
 	o("GET /test_user_data HTTP/1.0\n\n",
 		'User data: \[1234\]', 'user data in callback', 0);
-	o("GET /foo/secret HTTP/1.0\n\n",
-		'401 Unauthorized', 'mg_protect_uri', 0);
-	o("GET /foo/secret HTTP/1.0\nAuthorization: Digest username=bill\n\n",
-		'401 Unauthorized', 'mg_protect_uri (bill)', 0);
-	o("GET /foo/secret HTTP/1.0\nAuthorization: Digest username=joe\n\n",
-		'200 OK', 'mg_protect_uri (joe)', 0);
+#	o("GET /foo/secret HTTP/1.0\n\n",
+#		'401 Unauthorized', 'mg_protect_uri', 0);
+#	o("GET /foo/secret HTTP/1.0\nAuthorization: Digest username=bill\n\n",
+#		'401 Unauthorized', 'mg_protect_uri (bill)', 0);
+#	o("GET /foo/secret HTTP/1.0\nAuthorization: Digest username=joe\n\n",
+#		'200 OK', 'mg_protect_uri (joe)', 0);
+
+	# Test un-binding the URI
+	o("GET /foo/bar HTTP/1.0\n\n", 'HTTP/1.1 200 OK', '/foo bound', 0);
+	o("GET /test_remove_callback HTTP/1.0\n\n",
+			'Removing callbacks', 'Callback removal', 0);
+	o("GET /foo/bar HTTP/1.0\n\n", 'HTTP/1.1 404', '/foo unbound', 0);
 
 	kill_spawned_child();
 }

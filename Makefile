@@ -1,5 +1,5 @@
 # This file is part of Mongoose project, http://code.google.com/p/mongoose
-# $Id: Makefile 320 2009-04-14 21:46:29Z valenok $
+# $Id: Makefile 433 2009-06-30 12:15:27Z valenok $
 
 PROG=	mongoose
 
@@ -12,7 +12,6 @@ all:
 # -DDEBUG		- build debug version (very noisy) (+7kb)
 # -DNO_CGI		- disable CGI support (-5kb)
 # -DNO_SSL		- disable SSL functionality (-2kb)
-# -DNO_AUTH		- disable authorization support (-4kb)
 # -DCONFIG_FILE=\"file\" - use `file' as the default config file
 # -DNO_SSI		- disable SSI support (-4kb)
 # -DHAVE_STRTOUI64	- use system strtoui64() function for strtoull()
@@ -22,9 +21,10 @@ all:
 ###                 UNIX build: linux, bsd, mac, rtems
 ##########################################################################
 
-CFLAGS=		-W -Wall -std=c99 -pedantic -Os $(COPT)
+CFLAGS=		-W -Wall -std=c99 -pedantic -Os -fomit-frame-pointer $(COPT)
 MAC_SHARED=	-flat_namespace -bundle -undefined suppress
-LINFLAGS=	$(CFLAGS) -D_POSIX_SOURCE -D_BSD_SOURCE -ldl -lpthread
+LINFLAGS=	-D_POSIX_SOURCE -D_BSD_SOURCE -D_FILE_OFFSET_BITS=64 \
+		-D_LARGEFILE_SOURCE -ldl -lpthread $(CFLAGS)
 LIB=		_$(PROG).so
 
 linux:
@@ -55,15 +55,14 @@ solaris:
 #    (or Itanium/amd64 command promt to build x64 version)
 # 4. In the command prompt, go to mongoose directory and do "nmake windows"
 
-#WINDBG=	/Zi /DDEBUG /Od
-WINDBG=	/DNDEBUG /Os /Oi /GL /Gy
-WINOPT=	/MT /TC $(WINDBG) /nologo /W4 \
-	/D_CRT_SECURE_NO_WARNINGS /DHAVE_STRTOUI64
+#WINDBG=	/Zi /DDEBUG /Od /DDEBUG
+WINDBG=	/DNDEBUG /Os
+WINFLAGS=	/MT /TC /nologo /W4 /DHAVE_STRTOUI64 $(WINDBG) 
 windows:
-	cl $(WINOPT) mongoose.c /link /incremental:no /DLL \
-		/DEF:win32_installer\dll.def /out:_$(PROG).dll ws2_32.lib
-	cl $(WINOPT) mongoose.c main.c /link /incremental:no \
-		/out:$(PROG).exe ws2_32.lib advapi32.lib
+	cl $(WINFLAGS) mongoose.c /link /incremental:no /DLL \
+		/DEF:win32\dll.def /out:_$(PROG).dll ws2_32.lib
+	cl $(WINFLAGS) mongoose.c main.c /link /incremental:no \
+		/out:$(PROG).exe ws2_32.lib
 
 # Build for Windows under MinGW
 #MINGWDBG= -DDEBUG -O0
@@ -91,7 +90,7 @@ do_test:
 	perl test/test.pl $(TEST)
 
 release: clean
-	F=mongoose-`perl -lne '/define\s+MONGOOSE_VERSION\s+"(\S+)"/ and print $$1' mongoose.c`.tgz ; cd .. && tar --exclude \*.svn --exclude \*.swp --exclude \*.nfs\* --exclude win32_installer -czf x mongoose && mv x mongoose/$$F
+	F=mongoose-`perl -lne '/define\s+MONGOOSE_VERSION\s+"(\S+)"/ and print $$1' mongoose.c`.tgz ; cd .. && tar --exclude \*.svn --exclude \*.swp --exclude \*.nfs\* --exclude win32 -czf x mongoose && mv x mongoose/$$F
 
 clean:
 	rm -rf *.o *.core $(PROG) *.obj $(PROG).1.txt *.dSYM *.tgz
