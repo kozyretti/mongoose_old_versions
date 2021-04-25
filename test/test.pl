@@ -155,7 +155,7 @@ if (scalar(@ARGV) > 0 and $ARGV[0] eq 'unit') {
 # Command line options override config files settings
 write_file($config, "access_log_file access.log\n" .
            "listening_ports 127.0.0.1:12345\n");
-spawn("$exe -p 127.0.0.1:$port");
+spawn("$exe -listening_ports 127.0.0.1:$port");
 o("GET /test/hello.txt HTTP/1.0\n\n", 'HTTP/1.1 200 OK', 'Loading config file');
 unlink $config;
 kill_spawned_child();
@@ -450,7 +450,7 @@ sub do_PUT_test {
 }
 
 sub do_unit_test {
-  my $target = on_windows() ? 'w' : 'u';
+  my $target = on_windows() ? 'wi' : 'un';
   system("make $target") == 0 or fail("Unit test failed!");
 }
 
