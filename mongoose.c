@@ -20,7 +20,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  *
- * $Id: mongoose.c 442 2009-07-07 20:18:06Z valenok $
+ * $Id: mongoose.c 446 2009-07-08 21:06:56Z valenok $
  */
 
 #if defined(_WIN32)
@@ -141,7 +141,12 @@ static int pthread_mutex_unlock(pthread_mutex_t *);
 #else
 typedef unsigned int		uint32_t;
 typedef unsigned short		uint16_t;
+#if _MSC_VER > 1200
 typedef unsigned __int64	uint64_t;
+#else
+/* VC6 cannot cast double to unsigned __int64, needed by print_dir_entry() */
+typedef __int64	uint64_t;
+#endif /* _MSC_VER */
 #endif /* HAVE_STDINT */
 
 /*
@@ -191,7 +196,7 @@ typedef int SOCKET;
 
 #include "mongoose.h"
 
-#define	MONGOOSE_VERSION	"2.7"
+#define	MONGOOSE_VERSION	"2.8"
 #define	PASSWORDS_FILE_NAME	".htpasswd"
 #define	CGI_ENVIRONMENT_SIZE	4096
 #define	MAX_CGI_ENVIR_VARS	64
@@ -2549,13 +2554,13 @@ print_dir_entry(struct de *de)
 			    "%lu", (unsigned long) de->st.size);
 		else if (de->st.size < 1024 * 1024)
 			(void) mg_snprintf(de->conn, size, sizeof(size),
-			    "%.1fk", (double) (signed) de->st.size / 1024.0);
+			    "%.1fk", (double) de->st.size / 1024.0);
 		else if (de->st.size < 1024 * 1024 * 1024)
 			(void) mg_snprintf(de->conn, size, sizeof(size),
-			    "%.1fM", (double) (signed) de->st.size / 1048576);
+			    "%.1fM", (double) de->st.size / 1048576);
 		else
 			(void) mg_snprintf(de->conn, size, sizeof(size),
-			  "%.1fG", (double) (signed) de->st.size / 1073741824);
+			  "%.1fG", (double) de->st.size / 1073741824);
 	}
 	(void) strftime(mod, sizeof(mod), "%d-%b-%Y %H:%M",
 		localtime(&de->st.mtime));
