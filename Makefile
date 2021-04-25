@@ -24,7 +24,7 @@ bsd:
 
 rtems:
 	$(CC) -c $(COPT) $(CFLAGS) mongoose.c compat_rtems.c
-	$(AR) -r lib$(PROG).a *.o && ranlib lib$(PROG).a 
+	$(AR) -r lib$(PROG).a *.o && ranlib lib$(PROG).a
 
 # To build on Windows, follow these steps:
 # 1. Download and install Visual Studio Express 2008 to c:\msvc8
@@ -34,8 +34,8 @@ rtems:
 # 4. In the command prompt, go to mongoose directory and do "nmake windows"
 
 #WINDBG=	/Zi /DDEBUG /Od
-WINDBG=	/DNDEBUG /Os
-WINOPT=	/MT /TC $(WINDBG) /nologo /DNDEBUG /W4 \
+WINDBG=	/DNDEBUG /Os /Oi /GL /Gy
+WINOPT=	/MT /TC $(WINDBG) /nologo /W4 \
 	/D_CRT_SECURE_NO_WARNINGS /DHAVE_STRTOUI64
 windows: winexe windll
 
@@ -58,7 +58,7 @@ mingwdll:
 		-shared -Wl,--out-implib=$(PROG).lib -o $(PROG).dll
 
 mingwexe:
-	gcc $(MINGWOPT) $(SRCS) -lws2_32 -ladvapi32 -o $(PROG).exe 
+	gcc $(MINGWOPT) $(SRCS) -lws2_32 -ladvapi32 -o $(PROG).exe
 
 man:
 	cat mongoose.1 | tbl | groff -man -Tascii | col -b > mongoose.1.txt
@@ -73,3 +73,9 @@ release: clean
 
 clean:
 	rm -rf *.o *.core $(PROG) *.obj $(PROG).1.txt *.dSYM *.tgz
+
+p:
+	swig -python mongoose.swig
+	cc  -I python mongoose.c mongoose_wrap.c -bundle \
+		-o /tmp/_mongoose.so -flat_namespace -undefined suppress
+	PYTHONPATH=/tmp python test_swig.py

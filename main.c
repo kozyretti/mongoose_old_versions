@@ -10,7 +10,7 @@
  *
  * The above copyright notice and this permission notice shall be included in
  * all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -19,7 +19,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  *
- * $Id: main.c 201 2009-01-04 15:14:02Z valenok $
+ * $Id: main.c 260 2009-03-26 23:11:12Z valenok $
  */
 
 #include <stdio.h>
@@ -60,7 +60,7 @@ signal_handler(int sig_num)
 	if (sig_num == SIGCHLD) {
 		do {
 		} while (waitpid(-1, &sig_num, WNOHANG) > 0);
-	} else 
+	} else
 #endif /* !_WIN32 */
 	{
 		exit_flag = sig_num;
@@ -255,35 +255,35 @@ process_command_line_arguments(struct mg_context *ctx, char *argv[])
 }
 
 #ifdef _WIN32
-static SERVICE_STATUS		ss; 
-static SERVICE_STATUS_HANDLE	hStatus; 
+static SERVICE_STATUS		ss;
+static SERVICE_STATUS_HANDLE	hStatus;
 static char			service_name[20];
 
 static void WINAPI
-ControlHandler(DWORD code) 
-{ 
+ControlHandler(DWORD code)
+{
 	if (code == SERVICE_CONTROL_STOP || code == SERVICE_CONTROL_SHUTDOWN) {
-		ss.dwWin32ExitCode = 0; 
-		ss.dwCurrentState = SERVICE_STOPPED; 
-	} 
- 
+		ss.dwWin32ExitCode = 0;
+		ss.dwCurrentState = SERVICE_STOPPED;
+	}
+
 	SetServiceStatus(hStatus, &ss);
 }
 
 static void WINAPI
-ServiceMain(void) 
+ServiceMain(void)
 {
 	char path[MAX_PATH], *p, *av[] = {"mongoose_service", NULL, NULL};
 	struct mg_context *ctx;
 
 	av[1] = path;
 
-	ss.dwServiceType      = SERVICE_WIN32; 
-	ss.dwCurrentState     = SERVICE_RUNNING; 
+	ss.dwServiceType      = SERVICE_WIN32;
+	ss.dwCurrentState     = SERVICE_RUNNING;
 	ss.dwControlsAccepted = SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN;
 
 	hStatus = RegisterServiceCtrlHandler(service_name, ControlHandler);
-	SetServiceStatus(hStatus, &ss); 
+	SetServiceStatus(hStatus, &ss);
 
 	GetModuleFileName(NULL, path, sizeof(path));
 
@@ -301,9 +301,9 @@ ServiceMain(void)
 		mg_stop(ctx);
 	}
 
-	ss.dwCurrentState  = SERVICE_STOPPED; 
-	ss.dwWin32ExitCode = (DWORD) -1; 
-	SetServiceStatus(hStatus, &ss); 
+	ss.dwCurrentState  = SERVICE_STOPPED;
+	ss.dwWin32ExitCode = (DWORD) -1;
+	SetServiceStatus(hStatus, &ss);
 }
 
 static void
@@ -340,7 +340,6 @@ main(int argc, char *argv[])
 
 #ifndef _WIN32
 	(void) signal(SIGCHLD, signal_handler);
-	(void) signal(SIGPIPE, SIG_IGN);
 #endif /* _WIN32 */
 
 	(void) signal(SIGTERM, signal_handler);
@@ -364,8 +363,11 @@ main(int argc, char *argv[])
 	while (exit_flag == 0)
 		pause();
 
+	(void) printf("Exiting on signal %d, "
+	    "waiting for all threads to finish...", exit_flag);
+	fflush(stdout);
 	mg_stop(ctx);
-	(void) printf("Exit on signal %d\n", exit_flag);
+	(void) printf("%s", " done.\n");
 
 	return (EXIT_SUCCESS);
 }
