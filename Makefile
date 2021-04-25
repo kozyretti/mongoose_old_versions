@@ -34,16 +34,31 @@ rtems:
 
 #WINDBG=	/Zi /DDEBUG /Od
 WINDBG=	/DNDEBUG /Os
-WINOPT=	/MT /TC $(WINDBG) /nologo /DNDEBUG /W4 /D_CRT_SECURE_NO_WARNINGS
+WINOPT=	/MT /TC $(WINDBG) /nologo /DNDEBUG /W4 \
+	/D_CRT_SECURE_NO_WARNINGS /DHAVE_STRTOUI64
 windows: winexe windll
 
 windll:
-	cl $(WINOPT) mongoose.c /link /incremental:no /DLL /DEF:dll.def \
-		/out:$(PROG).dll ws2_32.lib
+	cl $(WINOPT) mongoose.c /link /incremental:no /DLL \
+		/DEF:win32_installer\dll.def /out:$(PROG).dll ws2_32.lib
 
 winexe:
 	cl $(WINOPT) $(SRCS) /link /incremental:no \
 		/out:$(PROG).exe ws2_32.lib advapi32.lib
+
+# Build for Windows under MinGW
+#MINGWDBG= -DDEBUG -O0
+MINGWDBG= -DNDEBUG -Os
+MINGWOPT= -W -Wall -mthreads -Wl,--subsystem,console -DHAVE_STDINT \
+	  $(MINGWDBG) -DHAVE_STDINT
+
+mingw: mingwexe mingwdll
+mingwdll:
+	gcc $(MINGWOPT) mongoose.c -lws2_32 \
+		-shared -Wl,--out-implib=$(PROG).lib -o $(PROG).dll
+
+mingwexe:
+	gcc $(MINGWOPT) $(SRCS) -lws2_32 -ladvapi32 -o $(PROG).exe 
 
 man:
 	cat mongoose.1 | tbl | groff -man -Tascii | col -b > mongoose.1.txt

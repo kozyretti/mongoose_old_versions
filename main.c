@@ -19,7 +19,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  *
- * $Id: main.c 153 2008-12-21 23:32:52Z valenok $
+ * $Id: main.c 201 2009-01-04 15:14:02Z valenok $
  */
 
 #include <stdio.h>
@@ -33,9 +33,12 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include <winsvc.h>
 #define DIRSEP			'\\'
 #define	snprintf		_snprintf
+#if !defined(__LCC__)
 #define	strdup(x)		_strdup(x)
+#endif /* !MINGW */
 #define	pause()			Sleep(INT_MAX)
 #else
 #include <sys/wait.h>
@@ -53,15 +56,14 @@ static struct mg_context *ctx;		/* Mongoose context		*/
 static void
 signal_handler(int sig_num)
 {
-	switch (sig_num) {
-#ifndef _WIN32
-	case SIGCHLD:
-		while (waitpid(-1, &sig_num, WNOHANG) > 0) ;
-		break;
+#if !defined(_WIN32)
+	if (sig_num == SIGCHLD) {
+		do {
+		} while (waitpid(-1, &sig_num, WNOHANG) > 0);
+	} else 
 #endif /* !_WIN32 */
-	default:
+	{
 		exit_flag = sig_num;
-		break;
 	}
 }
 
@@ -255,7 +257,6 @@ process_command_line_arguments(struct mg_context *ctx, char *argv[])
 #ifdef _WIN32
 static SERVICE_STATUS		ss; 
 static SERVICE_STATUS_HANDLE	hStatus; 
-static SERVICE_DESCRIPTION	service_descr = {"Web server"};
 static char			service_name[20];
 
 static void WINAPI

@@ -19,13 +19,14 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  *
- * $Id: embed.c 152 2008-12-21 15:20:52Z valenok $
+ * $Id: embed.c 168 2008-12-24 10:50:56Z valenok $
  * Unit test for the mongoose web server. Tests embedded API.
  */
 
 
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 #include "mongoose.h"
 
 #if !defined(LISTENING_PORT)
@@ -125,7 +126,15 @@ test_protect(struct mg_connection *conn, const struct mg_request_info *ri,
 
 	allowed = remote_user != NULL && !strcmp(allowed_user, remote_user);
 
-	* (void **) user_data = allowed ? (void *) 1 : NULL;
+	* (long *) user_data = allowed ? 1 : 0;
+}
+
+static void
+test_post(struct mg_connection *conn, const struct mg_request_info *ri,
+		void *user_data)
+{
+	mg_printf(conn, "%s", standard_reply);
+	mg_write(conn, ri->post_data, ri->post_data_len);
 }
 
 int main(void)
@@ -140,11 +149,12 @@ int main(void)
 	mg_bind_to_uri(ctx, "/test_get_request_info", &test_get_ri, NULL);
 	mg_bind_to_uri(ctx, "/foo/*", &test_get_ri, NULL);
 	mg_bind_to_uri(ctx, "/test_user_data", &test_user_data, &user_data);
+	mg_bind_to_uri(ctx, "/p", &test_post, NULL);
 
 	mg_bind_to_error_code(ctx, 404, &test_error, NULL);
 	mg_bind_to_error_code(ctx, 0, &test_error, NULL);
 
-	mg_protect_uri(ctx, "/foo/secret", &test_protect, "joe");
+	mg_protect_uri(ctx, "/foo/secret", &test_protect, (void *) "joe");
 
 	for (;;)
 		(void) getchar();
